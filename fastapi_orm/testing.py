@@ -45,18 +45,39 @@ def create_test_model_base() -> Tuple[Any, Any]:
     """
     test_base = declarative_base()
     
+    # Create TestModel by inheriting from both test_base and BaseModel functionality
+    # We need to manually mix in BaseModel's methods while using test_base's registry
     class TestModel(test_base, metaclass=ModelMeta):
         __abstract__ = True
         __allow_unmapped__ = True
-        
+    
+    # Copy methods from BaseModel, rebinding classmethods to work with TestModel hierarchy
+    import inspect
     for attr_name in dir(BaseModel):
-        if not attr_name.startswith('_'):
-            try:
-                attr_value = getattr(BaseModel, attr_name)
-                if callable(attr_value):
-                    setattr(TestModel, attr_name, classmethod(attr_value.__func__) if isinstance(attr_value, classmethod) else attr_value)
-            except (AttributeError, TypeError):
-                pass
+        if attr_name.startswith('_'):
+            continue
+        try:
+            # Get the attribute from the BaseModel class itself
+            attr_value = inspect.getattr_static(BaseModel, attr_name)
+            
+            # Skip if TestModel already has this attribute
+            if hasattr(TestModel, attr_name):
+                continue
+                
+            # Handle classmethods - need to extract and rewrap the function
+            if isinstance(attr_value, classmethod):
+                # Get the underlying function and create a new classmethod
+                func = attr_value.__func__
+                setattr(TestModel, attr_name, classmethod(func))
+            # Handle staticmethods
+            elif isinstance(attr_value, staticmethod):
+                func = attr_value.__func__
+                setattr(TestModel, attr_name, staticmethod(func))
+            # Handle regular methods and properties
+            else:
+                setattr(TestModel, attr_name, attr_value)
+        except (AttributeError, TypeError):
+            pass
     
     return test_base, TestModel
 
