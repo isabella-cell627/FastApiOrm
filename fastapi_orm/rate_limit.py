@@ -1,0 +1,509 @@
+import time
+import asyncio
+import logging
+from typing import Dict, Optional, Callable, Any
+from collections import defaultdict, deque
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+from fastapi import Request, HTTPException, status
+from fastapi.responses import JSONResponse
+from starlette.middleware.base import BaseHTTPMiddleware
+
+
+@dataclass
+class RateLimitConfig:
+    """
+    Configuration for rate limiting.
+    
+    Attributes:
+        requests: Maximum number of requests allowed
+        window: Time window in seconds
+        strategy: Rate limiting strategy ("fixed" or "sliding")
+        identifier: Function to identify the client (default: IP address)
+    """
+    requests: int
+    window: int
+    strategy: str = "sliding"
+    identifier: Optional[Callable[[Request], str]] = None
+    
+    def __post_init__(self):
+        if self.identifier is None:
+            self.identifier = lambda request: request.client.host if request.client else "unknown"
+
+
+class TokenBucket:
+    """
+    Token bucket rate limiter implementation.
+    
+    Allows burst traffic while maintaining average rate limits.
+    Tokens are added at a constant rate and consumed per request.
+    """
+    
+    def __init__(self, capacity: int, refill_rate: float):
+        """
+        Initialize token bucket.
+        
+        Args:
+            capacity: Maximum number of tokens (bucket size)
+            refill_rate: Tokens added per second
+        """
+        self.capacity = capacity
+        self.refill_rate = refill_rate
+        self.tokens = capacity
+        self.last_refill = time.time()
+        self._lock = asyncio.Lock()
+    
+    async def consume(self, tokens: int = 1) -> bool:
+        """
+        Try to consume tokens from bucket.
+        
+        Args:
+            tokens: Number of tokens to consume
+        
+        Returns:
+            True if tokens were consumed, False if insufficient tokens
+        """
+        async with self._lock:
+            now = time.time()
+            elapsed = now - self.last_refill
+            
+            self.tokens = min(
+                self.capacity,
+                self.tokens + (elapsed * self.refill_rate)
+            )
+            self.last_refill = now
+            
+            if self.tokens >= tokens:
+                self.tokens -= tokens
+                return True
+            
+            return False
+    
+    def get_tokens(self) -> float:
+        """Get current number of available tokens"""
+        return self.tokens
+
+
+class SlidingWindowCounter:
+    """
+    Sliding window rate limiter using a deque of timestamps.
+    
+    More accurate than fixed window, as it tracks individual requests
+    within a moving time window.
+    """
+    
+    def __init__(self, max_requests: int, window_seconds: int):
+        """
+        Initialize sliding window counter.
+        
+        Args:
+            max_requests: Maximum requests allowed in window
+            window_seconds: Time window in seconds
+        """
+        self.max_requests = max_requests
+        self.window_seconds = window_seconds
+        self.requests: deque = deque()
+        self._lock = asyncio.Lock()
+    
+    async def is_allowed(self) -> bool:
+        """
+        Check if request is allowed under rate limit.
+        
+        Returns:
+            True if request is allowed, False otherwise
+        """
+        async with self._lock:
+            now = time.time()
+            cutoff = now - self.window_seconds
+            
+            while self.requests and self.requests[0] < cutoff:
+                self.requests.popleft()
+            
+            if len(self.requests) < self.max_requests:
+                self.requests.append(now)
+                return True
+            
+            return False
+    
+    def get_count(self) -> int:
+        """Get current request count in window"""
+        return len(self.requests)
+    
+    def get_reset_time(self) -> float:
+        """Get time until oldest request expires"""
+        if not self.requests:
+            return 0
+        return self.requests[0] + self.window_seconds - time.time()
+
+
+class FixedWindowCounter:
+    """
+    Fixed window rate limiter.
+    
+    Simpler but less accurate - resets counter at fixed intervals.
+    Can allow up to 2x the limit at window boundaries.
+    """
+    
+    def __init__(self, max_requests: int, window_seconds: int):
+        """
+        Initialize fixed window counter.
+        
+        Args:
+            max_requests: Maximum requests allowed per window
+            window_seconds: Time window in seconds
+        """
+        self.max_requests = max_requests
+        self.window_seconds = window_seconds
+        self.count = 0
+        self.window_start = time.time()
+        self._lock = asyncio.Lock()
+    
+    async def is_allowed(self) -> bool:
+        """
+        Check if request is allowed under rate limit.
+        
+        Returns:
+            True if request is allowed, False otherwise
+        """
+        async with self._lock:
+            now = time.time()
+            
+            if now - self.window_start >= self.window_seconds:
+                self.count = 0
+                self.window_start = now
+            
+            if self.count < self.max_requests:
+                self.count += 1
+                return True
+            
+            return False
+    
+    def get_count(self) -> int:
+        """Get current request count"""
+        return self.count
+    
+    def get_reset_time(self) -> float:
+        """Get time until window resets"""
+        return (self.window_start + self.window_seconds) - time.time()
+
+
+class RateLimiter:
+    """
+    Flexible rate limiter with multiple strategies.
+    
+    Supports:
+    - Fixed window
+    - Sliding window
+    - Token bucket
+    - Per-client tracking
+    - Multiple rate limit tiers
+    
+    Example:
+        ```python
+        from fastapi_orm import RateLimiter, RateLimitConfig
+        
+        # Create rate limiter: 100 requests per minute
+        limiter = RateLimiter(
+            config=RateLimitConfig(
+                requests=100,
+                window=60,
+                strategy="sliding"
+            )
+        )
+        
+        # Check if request is allowed
+        if await limiter.is_allowed(request):
+            # Process request
+            pass
+        else:
+            # Reject request
+            raise HTTPException(status_code=429, detail="Rate limit exceeded")
+        ```
+    """
+    
+    def __init__(
+        self,
+        config: RateLimitConfig,
+        storage_backend: Optional[str] = "memory"
+    ):
+        """
+        Initialize rate limiter.
+        
+        Args:
+            config: Rate limit configuration
+            storage_backend: Storage backend ("memory" or "redis")
+        """
+        self.config = config
+        self.storage_backend = storage_backend
+        self._limiters: Dict[str, Any] = defaultdict(self._create_limiter)
+        self._logger = logging.getLogger("fastapi_orm.rate_limit")
+    
+    def _create_limiter(self):
+        """Create appropriate limiter based on strategy"""
+        if self.config.strategy == "sliding":
+            return SlidingWindowCounter(self.config.requests, self.config.window)
+        elif self.config.strategy == "fixed":
+            return FixedWindowCounter(self.config.requests, self.config.window)
+        elif self.config.strategy == "token_bucket":
+            refill_rate = self.config.requests / self.config.window
+            return TokenBucket(self.config.requests, refill_rate)
+        else:
+            raise ValueError(f"Unknown strategy: {self.config.strategy}")
+    
+    async def is_allowed(self, request: Request) -> bool:
+        """
+        Check if request is allowed under rate limit.
+        
+        Args:
+            request: FastAPI request object
+        
+        Returns:
+            True if allowed, False if rate limit exceeded
+        """
+        client_id = self.config.identifier(request)
+        limiter = self._limiters[client_id]
+        
+        if isinstance(limiter, TokenBucket):
+            return await limiter.consume()
+        else:
+            return await limiter.is_allowed()
+    
+    def get_limit_info(self, request: Request) -> Dict[str, Any]:
+        """
+        Get rate limit information for a client.
+        
+        Args:
+            request: FastAPI request object
+        
+        Returns:
+            Dictionary with limit, remaining, reset time
+        """
+        client_id = self.config.identifier(request)
+        limiter = self._limiters.get(client_id)
+        
+        if not limiter:
+            return {
+                "limit": self.config.requests,
+                "remaining": self.config.requests,
+                "reset": 0
+            }
+        
+        if isinstance(limiter, TokenBucket):
+            return {
+                "limit": self.config.requests,
+                "remaining": int(limiter.get_tokens()),
+                "reset": 0
+            }
+        else:
+            return {
+                "limit": self.config.requests,
+                "remaining": self.config.requests - limiter.get_count(),
+                "reset": int(limiter.get_reset_time())
+            }
+    
+    def clear_client(self, client_id: str) -> None:
+        """Remove rate limit data for a specific client"""
+        if client_id in self._limiters:
+            del self._limiters[client_id]
+    
+    def clear_all(self) -> None:
+        """Clear all rate limit data"""
+        self._limiters.clear()
+
+
+class RateLimitMiddleware(BaseHTTPMiddleware):
+    """
+    FastAPI middleware for automatic rate limiting.
+    
+    Applies rate limits to all routes or specific paths.
+    
+    Example:
+        ```python
+        from fastapi import FastAPI
+        from fastapi_orm import RateLimitMiddleware, RateLimitConfig
+        
+        app = FastAPI()
+        
+        # Add global rate limiting
+        app.add_middleware(
+            RateLimitMiddleware,
+            config=RateLimitConfig(requests=100, window=60),
+            exclude_paths=["/health", "/metrics"]
+        )
+        ```
+    """
+    
+    def __init__(
+        self,
+        app,
+        config: RateLimitConfig,
+        exclude_paths: Optional[list] = None,
+        include_headers: bool = True
+    ):
+        """
+        Initialize rate limit middleware.
+        
+        Args:
+            app: FastAPI application
+            config: Rate limit configuration
+            exclude_paths: List of paths to exclude from rate limiting
+            include_headers: Include rate limit info in response headers
+        """
+        super().__init__(app)
+        self.limiter = RateLimiter(config)
+        self.exclude_paths = exclude_paths or []
+        self.include_headers = include_headers
+        self._logger = logging.getLogger("fastapi_orm.rate_limit.middleware")
+    
+    async def dispatch(self, request: Request, call_next):
+        """Process request with rate limiting"""
+        if request.url.path in self.exclude_paths:
+            return await call_next(request)
+        
+        if not await self.limiter.is_allowed(request):
+            limit_info = self.limiter.get_limit_info(request)
+            client_host = request.client.host if request.client else "unknown"
+            
+            self._logger.warning(
+                f"Rate limit exceeded for {client_host} on {request.url.path}"
+            )
+            
+            return JSONResponse(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                content={
+                    "error": "Rate limit exceeded",
+                    "message": f"Too many requests. Limit: {limit_info['limit']} per {self.limiter.config.window}s",
+                    "retry_after": limit_info['reset']
+                },
+                headers={
+                    "X-RateLimit-Limit": str(limit_info['limit']),
+                    "X-RateLimit-Remaining": str(limit_info['remaining']),
+                    "X-RateLimit-Reset": str(limit_info['reset']),
+                    "Retry-After": str(max(1, limit_info['reset']))
+                }
+            )
+        
+        response = await call_next(request)
+        
+        if self.include_headers:
+            limit_info = self.limiter.get_limit_info(request)
+            response.headers["X-RateLimit-Limit"] = str(limit_info['limit'])
+            response.headers["X-RateLimit-Remaining"] = str(limit_info['remaining'])
+            response.headers["X-RateLimit-Reset"] = str(limit_info['reset'])
+        
+        return response
+
+
+def rate_limit(
+    requests: int,
+    window: int,
+    strategy: str = "sliding",
+    identifier: Optional[Callable[[Request], str]] = None
+):
+    """
+    Decorator for route-specific rate limiting.
+    
+    Args:
+        requests: Maximum requests allowed
+        window: Time window in seconds
+        strategy: Rate limiting strategy
+        identifier: Function to identify clients
+    
+    Example:
+        ```python
+        from fastapi import FastAPI, Request
+        from fastapi_orm import rate_limit
+        
+        app = FastAPI()
+        
+        @app.get("/api/expensive")
+        @rate_limit(requests=10, window=60)
+        async def expensive_operation(request: Request):
+            return {"result": "success"}
+        ```
+    """
+    config = RateLimitConfig(
+        requests=requests,
+        window=window,
+        strategy=strategy,
+        identifier=identifier
+    )
+    limiter = RateLimiter(config)
+    
+    def decorator(func):
+        async def wrapper(request: Request, *args, **kwargs):
+            if not await limiter.is_allowed(request):
+                limit_info = limiter.get_limit_info(request)
+                raise HTTPException(
+                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                    detail=f"Rate limit exceeded. Limit: {requests} per {window}s",
+                    headers={
+                        "X-RateLimit-Limit": str(limit_info['limit']),
+                        "X-RateLimit-Remaining": str(limit_info['remaining']),
+                        "X-RateLimit-Reset": str(limit_info['reset']),
+                        "Retry-After": str(max(1, limit_info['reset']))
+                    }
+                )
+            return await func(request, *args, **kwargs)
+        
+        return wrapper
+    
+    return decorator
+
+
+class TieredRateLimiter:
+    """
+    Multi-tier rate limiter for different user levels.
+    
+    Example:
+        ```python
+        from fastapi_orm import TieredRateLimiter, RateLimitConfig
+        
+        limiter = TieredRateLimiter({
+            "free": RateLimitConfig(requests=10, window=60),
+            "pro": RateLimitConfig(requests=100, window=60),
+            "enterprise": RateLimitConfig(requests=1000, window=60)
+        })
+        
+        # Check limit based on user tier
+        tier = get_user_tier(request)
+        if not await limiter.is_allowed(request, tier):
+            raise HTTPException(status_code=429)
+        ```
+    """
+    
+    def __init__(self, tier_configs: Dict[str, RateLimitConfig]):
+        """
+        Initialize tiered rate limiter.
+        
+        Args:
+            tier_configs: Dictionary mapping tier names to configs
+        """
+        self.tier_configs = tier_configs
+        self.limiters = {
+            tier: RateLimiter(config)
+            for tier, config in tier_configs.items()
+        }
+    
+    async def is_allowed(self, request: Request, tier: str = "default") -> bool:
+        """
+        Check if request is allowed for given tier.
+        
+        Args:
+            request: FastAPI request
+            tier: User tier name
+        
+        Returns:
+            True if allowed, False otherwise
+        """
+        if tier not in self.limiters:
+            tier = "default"
+        
+        return await self.limiters[tier].is_allowed(request)
+    
+    def get_limit_info(self, request: Request, tier: str = "default") -> Dict[str, Any]:
+        """Get rate limit info for specific tier"""
+        if tier not in self.limiters:
+            tier = "default"
+        
+        return self.limiters[tier].get_limit_info(request)

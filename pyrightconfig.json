@@ -1,0 +1,11 @@
+{
+  "venvPath": ".",
+  "venv": ".pythonlibs",
+  "extraPaths": [
+    ".",
+    ".pythonlibs/lib/python3.11/site-packages"
+  ],
+  "python.analysis.autoSearchPaths": true,
+  "python.analysis.diagnosticMode": "workspace",
+  "python.analysis.typeCheckingMode": "basic"
+}

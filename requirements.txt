@@ -1,0 +1,39 @@
+# Core dependencies
+sqlalchemy>=2.0.0
+fastapi>=0.100.0
+pydantic>=2.0.0
+uvicorn>=0.20.0
+
+# Database drivers
+asyncpg>=0.29.0
+aiosqlite>=0.19.0
+
+# Migration support
+alembic>=1.12.0
+
+# Optional dependencies (install separately as needed)
+# For distributed caching: redis>=5.0.0
+# For WebSocket support: websockets>=12.0
+# For GraphQL integration: strawberry-graphql>=0.200.0
+# For file uploads: aiofiles>=23.0.0 boto3>=1.28.0 pillow>=10.0.0
+
+# Development dependencies (for contributors)
+# pytest>=7.4.0
+# pytest-asyncio>=0.21.0
+# httpx>=0.24.0
+aiosqlite
+alembic
+asyncpg
+fastapi
+pydantic
+sqlalchemy
+uvicorn
+httpx
+pytest
+pytest-asyncio
+httpx
+pytest
+pytest-asyncio
+httpx
+pytest
+pytest-asyncio

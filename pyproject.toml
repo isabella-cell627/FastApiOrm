@@ -1,0 +1,108 @@
+[project]
+name = "fastapi-orm"
+version = "0.11.0"
+description = "A production-ready ORM for FastAPI with async support, automatic Pydantic integration, and Django-like syntax"
+authors = [
+    {name = "Abdulaziz Al-Qadimi", email = "eng7mi@gmail.com"}
+]
+readme = "README_PYPI.md"
+license = {text = "MIT"}
+requires-python = ">=3.11"
+keywords = [
+    "fastapi",
+    "orm",
+    "sqlalchemy",
+    "async",
+    "pydantic",
+    "database",
+    "postgresql",
+    "mysql",
+    "sqlite",
+    "rest-api",
+    "crud",
+    "asyncio",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Database",
+    "Topic :: Internet :: WWW/HTTP",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Framework :: FastAPI",
+    "Framework :: AsyncIO",
+    "Operating System :: OS Independent",
+    "Typing :: Typed",
+]
+
+dependencies = [
+    "sqlalchemy>=2.0.0",
+    "fastapi>=0.100.0",
+    "pydantic>=2.0.0",
+    "uvicorn>=0.20.0",
+    "asyncpg>=0.29.0",
+    "aiosqlite>=0.19.0",
+    "alembic>=1.12.0",
+]
+
+[project.optional-dependencies]
+redis = ["redis>=5.0.0"]
+websockets = ["websockets>=12.0"]
+graphql = ["strawberry-graphql>=0.200.0"]
+files = ["aiofiles>=23.0.0", "boto3>=1.28.0", "pillow>=10.0.0"]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.21.0",
+    "httpx>=0.24.0",
+]
+all = [
+    "redis>=5.0.0",
+    "websockets>=12.0",
+    "strawberry-graphql>=0.200.0",
+    "aiofiles>=23.0.0",
+    "boto3>=1.28.0",
+    "pillow>=10.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/Alqudimi/FastApiOrm"
+Repository = "https://github.com/Alqudimi/FastApiOrm"
+Documentation = "https://github.com/Alqudimi/FastApiOrm/tree/main/doc"
+"Bug Tracker" = "https://github.com/Alqudimi/FastApiOrm/issues"
+Changelog = "https://github.com/Alqudimi/FastApiOrm/blob/main/CHANGELOG_V0.11.md"
+
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["fastapi_orm"]
+
+[tool.setuptools.package-data]
+fastapi_orm = ["py.typed"]
+
+[tool.pytest.ini_options]
+pythonpath = "."
+testpaths = ["tests"]
+asyncio_mode = "auto"
+python_files = ["test_*.py", "*_test.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+
+[tool.black]
+line-length = 100
+target-version = ['py311']
+include = '\.pyi?$'
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false

@@ -1,0 +1,21 @@
+include README.md
+include README_PYPI.md
+include LICENSE
+include requirements.txt
+include CHANGELOG_*.md
+include FEATURES.md
+include UTILITIES_GUIDE.md
+include DISTRIBUTED_CACHE.md
+include TENANCY.md
+include CLI_USAGE.md
+include NEW_FEATURES_V0.3.md
+
+recursive-include fastapi_orm *.py
+recursive-include examples *.py
+
+exclude tests/*
+exclude *.db
+exclude .gitignore
+exclude .replit
+exclude replit.nix
+exclude pyproject.toml
