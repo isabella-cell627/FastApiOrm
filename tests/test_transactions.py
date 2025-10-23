@@ -1,18 +1,14 @@
 import pytest
 import pytest_asyncio
 from fastapi_orm import (
-    Database,
-    Model,
-    IntegerField,
-    StringField,
-    transactional,
-    transaction,
-    atomic,
-    TransactionError
+    Database, IntegerField, StringField, transactional, transaction, atomic, TransactionError
 )
+from fastapi_orm.testing import create_test_model_base
+
+TestBase, TestModel = create_test_model_base()
 
 
-class TransactionUser(Model):
+class TransactionUser(TestModel):
     __tablename__ = "test_transaction_users"
     
     id: int = IntegerField(primary_key=True)
@@ -22,7 +18,7 @@ class TransactionUser(Model):
 
 @pytest_asyncio.fixture
 async def db():
-    database = Database("sqlite+aiosqlite:///:memory:", echo=False)
+    database = Database("sqlite+aiosqlite:///:memory:", echo=False, base=TestBase)
     await database.create_tables()
     yield database
     await database.close()

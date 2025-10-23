@@ -1,18 +1,16 @@
 import pytest
 import pytest_asyncio
 from fastapi_orm import (
-    Database,
-    Model,
-    IntegerField,
-    StringField,
-    FloatField,
-    BooleanField,
+    Database, IntegerField, StringField, FloatField, BooleanField
 )
+from fastapi_orm.testing import create_test_model_base
+
+TestBase, TestModel = create_test_model_base()
 from fastapi_orm.query_builder import QueryBuilder, CaseBuilder, WindowFunction
 from sqlalchemy import func
 
 
-class Employee(Model):
+class Employee(TestModel):
     __tablename__ = "test_employees"
     
     id: int = IntegerField(primary_key=True)
@@ -24,7 +22,7 @@ class Employee(Model):
 
 @pytest_asyncio.fixture
 async def db():
-    database = Database("sqlite+aiosqlite:///:memory:", echo=False)
+    database = Database("sqlite+aiosqlite:///:memory:", echo=False, base=TestBase)
     await database.create_tables()
     yield database
     await database.close()

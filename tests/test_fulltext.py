@@ -1,10 +1,13 @@
 import pytest
 import pytest_asyncio
-from fastapi_orm import Database, Model, IntegerField, StringField, TextField
+from fastapi_orm import Database, IntegerField, StringField, TextField
+from fastapi_orm.testing import create_test_model_base
+
+TestBase, TestModel = create_test_model_base()
 from fastapi_orm.fulltext import create_search_vector, ts_query
 
 
-class Article(Model):
+class Article(TestModel):
     __tablename__ = "fulltext_articles"
     
     id: int = IntegerField(primary_key=True)
@@ -15,7 +18,7 @@ class Article(Model):
 
 @pytest_asyncio.fixture
 async def db():
-    database = Database("sqlite+aiosqlite:///:memory:", echo=False)
+    database = Database("sqlite+aiosqlite:///:memory:", echo=False, base=TestBase)
     await database.create_tables()
     yield database
     await database.close()

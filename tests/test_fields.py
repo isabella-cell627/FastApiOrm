@@ -20,7 +20,10 @@ from fastapi_orm import (
     ArrayField,
     EnumField,
 )
+from fastapi_orm.testing import create_test_model_base
 from fastapi_orm.exceptions import ValidationError
+
+TestBase, TestModel = create_test_model_base()
 
 
 class Status(str, Enum):
@@ -29,10 +32,7 @@ class Status(str, Enum):
     PENDING = "pending"
 
 
-from fastapi_orm import Model
-
-
-class FieldTestModel(Model):
+class FieldTestModel(TestModel):
     __tablename__ = "test_fields"
     
     id: int = IntegerField(primary_key=True)
@@ -52,7 +52,7 @@ class FieldTestModel(Model):
 
 @pytest_asyncio.fixture
 async def db():
-    database = Database("sqlite+aiosqlite:///:memory:", echo=False)
+    database = Database("sqlite+aiosqlite:///:memory:", echo=False, base=TestBase)
     await database.create_tables()
     yield database
     await database.close()

@@ -1,6 +1,9 @@
 import pytest
 import pytest_asyncio
-from fastapi_orm import Database, Model, IntegerField, StringField
+from fastapi_orm import Database, IntegerField, StringField
+from fastapi_orm.testing import create_test_model_base
+
+TestBase, TestModel = create_test_model_base()
 from fastapi_orm.polymorphic import (
     ContentTypeRegistry,
     GenericForeignKey,
@@ -8,7 +11,7 @@ from fastapi_orm.polymorphic import (
 )
 
 
-class Post(Model):
+class Post(TestModel):
     __tablename__ = "poly_posts"
     
     id: int = IntegerField(primary_key=True)
@@ -16,7 +19,7 @@ class Post(Model):
     content: str = StringField(max_length=1000, nullable=False)
 
 
-class Photo(Model):
+class Photo(TestModel):
     __tablename__ = "poly_photos"
     
     id: int = IntegerField(primary_key=True)
@@ -24,7 +27,7 @@ class Photo(Model):
     caption: str = StringField(max_length=200, nullable=True)
 
 
-class Comment(Model, PolymorphicMixin):
+class Comment(TestModel, PolymorphicMixin):
     __tablename__ = "poly_comments"
     
     id: int = IntegerField(primary_key=True)
@@ -43,7 +46,7 @@ async def db():
     ContentTypeRegistry.register(Post, "poly_posts")
     ContentTypeRegistry.register(Photo, "poly_photos")
     
-    database = Database("sqlite+aiosqlite:///:memory:", echo=False)
+    database = Database("sqlite+aiosqlite:///:memory:", echo=False, base=TestBase)
     await database.create_tables()
     yield database
     await database.close()

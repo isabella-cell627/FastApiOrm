@@ -1,10 +1,13 @@
 import pytest
 import pytest_asyncio
-from fastapi_orm import Database, Model, IntegerField, StringField
+from fastapi_orm import Database, IntegerField, StringField
+from fastapi_orm.testing import create_test_model_base
+
+TestBase, TestModel = create_test_model_base()
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
-class DbUser(Model):
+class DbUser(TestModel):
     __tablename__ = "db_test_users"
     
     id: int = IntegerField(primary_key=True)
@@ -14,7 +17,7 @@ class DbUser(Model):
 
 @pytest_asyncio.fixture
 async def db():
-    database = Database("sqlite+aiosqlite:///:memory:", echo=False)
+    database = Database("sqlite+aiosqlite:///:memory:", echo=False, base=TestBase)
     yield database
     await database.close()
 
@@ -143,7 +146,7 @@ async def test_database_echo_disabled(db):
 @pytest.mark.asyncio
 async def test_database_with_echo():
     """Test database with echo enabled"""
-    database = Database("sqlite+aiosqlite:///:memory:", echo=True)
+    database = Database("sqlite+aiosqlite:///:memory:", echo=True, base=TestBase)
     assert database.echo is True
     await database.close()
 

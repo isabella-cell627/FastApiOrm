@@ -2,11 +2,14 @@ import pytest
 
 pytest.importorskip("strawberry", reason="strawberry-graphql is required for GraphQL integration tests")
 
-from fastapi_orm import Model, IntegerField, StringField
+from fastapi_orm import IntegerField, StringField
+from fastapi_orm.testing import create_test_model_base
+
+TestBase, TestModel = create_test_model_base()
 from fastapi_orm.graphql_integration import GraphQLManager
 
 
-class User(Model):
+class User(TestModel):
     __tablename__ = "graphql_users"
     
     id: int = IntegerField(primary_key=True)

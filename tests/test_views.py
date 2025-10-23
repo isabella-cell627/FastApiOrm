@@ -1,10 +1,13 @@
 import pytest
 import pytest_asyncio
-from fastapi_orm import Database, Model, IntegerField, StringField, BooleanField
+from fastapi_orm import Database, IntegerField, StringField, BooleanField
+from fastapi_orm.testing import create_test_model_base
+
+TestBase, TestModel = create_test_model_base()
 from fastapi_orm.views import ViewManager
 
 
-class User(Model):
+class User(TestModel):
     __tablename__ = "views_users"
     
     id: int = IntegerField(primary_key=True)
@@ -16,7 +19,7 @@ class User(Model):
 
 @pytest_asyncio.fixture
 async def db():
-    database = Database("sqlite+aiosqlite:///:memory:", echo=False)
+    database = Database("sqlite+aiosqlite:///:memory:", echo=False, base=TestBase)
     await database.create_tables()
     
     async with database.session() as session:
@@ -93,7 +96,7 @@ async def test_drop_nonexistent_view_with_if_exists(db):
 @pytest.mark.asyncio
 async def test_view_manager_initialization():
     """Test ViewManager initialization"""
-    database = Database("sqlite+aiosqlite:///:memory:", echo=False)
+    database = Database("sqlite+aiosqlite:///:memory:", echo=False, base=TestBase)
     view_mgr = ViewManager(database.engine)
     
     assert view_mgr.engine is not None

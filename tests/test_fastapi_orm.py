@@ -3,7 +3,6 @@ import pytest_asyncio
 import asyncio
 from fastapi_orm import (
     Database,
-    Model,
     IntegerField,
     StringField,
     TextField,
@@ -16,9 +15,12 @@ from fastapi_orm import (
     transactional,
     transaction,
 )
+from fastapi_orm.testing import create_test_model_base
+
+TestBase, TestModel = create_test_model_base()
 
 
-class User(Model):
+class User(TestModel):
     __tablename__ = "test_users"
     
     id: int = IntegerField(primary_key=True)
@@ -32,7 +34,7 @@ class User(Model):
     posts = OneToMany("Post", back_populates="author")
 
 
-class Post(Model):
+class Post(TestModel):
     __tablename__ = "test_posts"
     
     id: int = IntegerField(primary_key=True)
@@ -44,7 +46,7 @@ class Post(Model):
     author = ManyToOne("User", back_populates="posts")
 
 
-class SoftDeletePost(Model, SoftDeleteMixin):
+class SoftDeletePost(TestModel, SoftDeleteMixin):
     __tablename__ = "soft_delete_posts"
     
     id: int = IntegerField(primary_key=True)
@@ -54,7 +56,7 @@ class SoftDeletePost(Model, SoftDeleteMixin):
 
 @pytest_asyncio.fixture
 async def db():
-    database = Database("sqlite+aiosqlite:///:memory:", echo=False)
+    database = Database("sqlite+aiosqlite:///:memory:", echo=False, base=TestBase)
     await database.create_tables()
     yield database
     await database.close()

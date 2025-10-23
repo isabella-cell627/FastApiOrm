@@ -1,6 +1,9 @@
 import pytest
 import pytest_asyncio
-from fastapi_orm import Database, Model, IntegerField, StringField, DecimalField
+from fastapi_orm import Database, IntegerField, StringField, DecimalField
+from fastapi_orm.testing import create_test_model_base
+
+TestBase, TestModel = create_test_model_base()
 from fastapi_orm.composite_keys import (
     composite_primary_key,
     composite_unique,
@@ -11,7 +14,7 @@ from fastapi_orm.composite_keys import (
 from fastapi_orm.exceptions import ValidationError
 
 
-class OrderItem(Model, CompositeKeyMixin):
+class OrderItem(TestModel, CompositeKeyMixin):
     __tablename__ = "composite_order_items"
     
     order_id: int = IntegerField()
@@ -28,7 +31,7 @@ class OrderItem(Model, CompositeKeyMixin):
         return ("order_id", "product_id")
 
 
-class UserEmail(Model):
+class UserEmail(TestModel):
     __tablename__ = "composite_user_emails"
     
     id: int = IntegerField(primary_key=True)
@@ -41,7 +44,7 @@ class UserEmail(Model):
     )
 
 
-class Product(Model):
+class Product(TestModel):
     __tablename__ = "composite_products"
     
     id: int = IntegerField(primary_key=True)
@@ -57,7 +60,7 @@ class Product(Model):
 
 @pytest_asyncio.fixture
 async def db():
-    database = Database("sqlite+aiosqlite:///:memory:", echo=False)
+    database = Database("sqlite+aiosqlite:///:memory:", echo=False, base=TestBase)
     await database.create_tables()
     yield database
     await database.close()

@@ -2,11 +2,13 @@ import pytest
 import pytest_asyncio
 from fastapi_orm import (
     Database,
-    Model,
     IntegerField,
     StringField,
     TextField,
 )
+from fastapi_orm.testing import create_test_model_base
+
+TestBase, TestModel = create_test_model_base()
 from fastapi_orm.relations import (
     ForeignKeyField,
     OneToMany,
@@ -16,7 +18,7 @@ from fastapi_orm.relations import (
 )
 
 
-class Author(Model):
+class Author(TestModel):
     __tablename__ = "rel_authors"
     
     id: int = IntegerField(primary_key=True)
@@ -25,7 +27,7 @@ class Author(Model):
     books = OneToMany("Book", back_populates="author")
 
 
-class Book(Model):
+class Book(TestModel):
     __tablename__ = "rel_books"
     
     id: int = IntegerField(primary_key=True)
@@ -42,7 +44,7 @@ Base = declarative_base()
 book_tags = create_association_table("book_tags", "rel_books", "rel_tags", Base)
 
 
-class Tag(Model):
+class Tag(TestModel):
     __tablename__ = "rel_tags"
     
     id: int = IntegerField(primary_key=True)
@@ -53,7 +55,7 @@ class Tag(Model):
 
 @pytest_asyncio.fixture
 async def db():
-    database = Database("sqlite+aiosqlite:///:memory:", echo=False)
+    database = Database("sqlite+aiosqlite:///:memory:", echo=False, base=TestBase)
     await database.create_tables()
     yield database
     await database.close()

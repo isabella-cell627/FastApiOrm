@@ -48,6 +48,7 @@ class Database:
         pool_pre_ping: bool = True,
         log_slow_queries: bool = False,
         slow_query_threshold: float = 1.0,
+        base: Optional[Any] = None,
     ):
         """
         Initialize database connection.
@@ -62,6 +63,7 @@ class Database:
             pool_pre_ping: Test connections before using them (default: True)
             log_slow_queries: Log queries that exceed slow_query_threshold (default: False)
             slow_query_threshold: Threshold in seconds for slow query warnings (default: 1.0)
+            base: Optional custom declarative base for testing or multi-tenancy (default: uses global Base)
         
         Note:
             Pool settings are ignored for SQLite as it uses a different pool implementation.
@@ -73,6 +75,7 @@ class Database:
         self.pool_timeout = pool_timeout
         self.pool_recycle = pool_recycle
         self.pool_pre_ping = pool_pre_ping
+        self.base = base if base is not None else Base
         self.log_slow_queries = log_slow_queries
         self.slow_query_threshold = slow_query_threshold
         self._logger = logging.getLogger("fastapi_orm.database")
@@ -145,12 +148,12 @@ class Database:
 
     async def create_tables(self):
         async with self.engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
+            await conn.run_sync(self.base.metadata.create_all)
         self._initialized = True
 
     async def drop_tables(self):
         async with self.engine.begin() as conn:
-            await conn.run_sync(Base.metadata.drop_all)
+            await conn.run_sync(self.base.metadata.drop_all)
 
     async def close(self):
         await self.engine.dispose()

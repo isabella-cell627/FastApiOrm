@@ -1,16 +1,15 @@
 import pytest
 import pytest_asyncio
 from fastapi_orm import (
-    Database,
-    Model,
-    IntegerField,
-    StringField,
-    BooleanField,
+    Database, IntegerField, StringField, BooleanField
 )
+from fastapi_orm.testing import create_test_model_base
+
+TestBase, TestModel = create_test_model_base()
 from fastapi_orm.query import Q
 
 
-class QueryUser(Model):
+class QueryUser(TestModel):
     __tablename__ = "query_test_users"
     
     id: int = IntegerField(primary_key=True)
@@ -23,7 +22,7 @@ class QueryUser(Model):
 
 @pytest_asyncio.fixture
 async def db():
-    database = Database("sqlite+aiosqlite:///:memory:", echo=False)
+    database = Database("sqlite+aiosqlite:///:memory:", echo=False, base=TestBase)
     await database.create_tables()
     yield database
     await database.close()

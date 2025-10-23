@@ -1,6 +1,9 @@
 import pytest
 import pytest_asyncio
-from fastapi_orm import Database, Model, IntegerField, StringField, DecimalField
+from fastapi_orm import Database, IntegerField, StringField, DecimalField
+from fastapi_orm.testing import create_test_model_base
+
+TestBase, TestModel = create_test_model_base()
 from fastapi_orm.constraints import (
     create_composite_primary_key,
     create_composite_unique,
@@ -77,12 +80,12 @@ def test_create_check_constraint_auto_name():
 
 @pytest_asyncio.fixture
 async def db():
-    database = Database("sqlite+aiosqlite:///:memory:", echo=False)
+    database = Database("sqlite+aiosqlite:///:memory:", echo=False, base=TestBase)
     yield database
     await database.close()
 
 
-class ProductModel(Model):
+class ProductModel(TestModel):
     __tablename__ = "constraint_products"
     
     id: int = IntegerField(primary_key=True)

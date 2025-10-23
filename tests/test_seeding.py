@@ -1,11 +1,14 @@
 import pytest
 import pytest_asyncio
 import random
-from fastapi_orm import Database, Model, IntegerField, StringField, BooleanField
+from fastapi_orm import Database, IntegerField, StringField, BooleanField
+from fastapi_orm.testing import create_test_model_base
+
+TestBase, TestModel = create_test_model_base()
 from fastapi_orm.seeding import Seeder
 
 
-class SeedUser(Model):
+class SeedUser(TestModel):
     __tablename__ = "seed_users"
     
     id: int = IntegerField(primary_key=True)
@@ -15,7 +18,7 @@ class SeedUser(Model):
     is_active: bool = BooleanField(default=True)
 
 
-class SeedPost(Model):
+class SeedPost(TestModel):
     __tablename__ = "seed_posts"
     
     id: int = IntegerField(primary_key=True)
@@ -26,7 +29,7 @@ class SeedPost(Model):
 
 @pytest_asyncio.fixture
 async def db():
-    database = Database("sqlite+aiosqlite:///:memory:", echo=False)
+    database = Database("sqlite+aiosqlite:///:memory:", echo=False, base=TestBase)
     await database.create_tables()
     yield database
     await database.close()
