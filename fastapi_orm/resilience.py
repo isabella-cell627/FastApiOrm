@@ -60,15 +60,16 @@ class CircuitBreaker:
     Circuit breaker pattern to prevent cascading failures.
     
     States:
-    - CLOSED: Normal operation
-    - OPEN: Failing, reject requests immediately
-    - HALF_OPEN: Testing if service recovered
+    - closed: Normal operation
+    - open: Failing, reject requests immediately
+    - half-open: Testing if service recovered
     """
     
     def __init__(
         self,
         failure_threshold: int = 5,
-        recovery_timeout: float = 60.0,
+        recovery_timeout: Optional[float] = None,
+        timeout: Optional[float] = None,
         half_open_attempts: int = 1
     ):
         """
@@ -76,25 +77,27 @@ class CircuitBreaker:
         
         Args:
             failure_threshold: Number of failures before opening circuit
-            recovery_timeout: Seconds to wait before attempting recovery
+            recovery_timeout: Seconds to wait before attempting recovery (deprecated, use timeout)
+            timeout: Seconds to wait before attempting recovery
             half_open_attempts: Number of successful attempts to close circuit
         """
         self.failure_threshold = failure_threshold
-        self.recovery_timeout = recovery_timeout
+        self.recovery_timeout = timeout or recovery_timeout or 60.0
+        self.timeout = self.recovery_timeout  # Alias for compatibility
         self.half_open_attempts = half_open_attempts
         
         self.failure_count = 0
         self.success_count = 0
         self.last_failure_time: Optional[datetime] = None
-        self.state = "CLOSED"
+        self.state = "closed"
     
     def record_success(self) -> None:
         """Record a successful operation."""
-        if self.state == "HALF_OPEN":
+        if self.state == "half-open":
             self.success_count += 1
             if self.success_count >= self.half_open_attempts:
                 logger.info("Circuit breaker closing after successful recovery")
-                self.state = "CLOSED"
+                self.state = "closed"
                 self.failure_count = 0
                 self.success_count = 0
         else:
@@ -106,29 +109,58 @@ class CircuitBreaker:
         self.last_failure_time = datetime.utcnow()
         
         if self.failure_count >= self.failure_threshold:
-            if self.state != "OPEN":
+            if self.state != "open":
                 logger.warning(
                     f"Circuit breaker opening after {self.failure_count} failures"
                 )
-            self.state = "OPEN"
+            self.state = "open"
     
     def can_attempt(self) -> bool:
         """Check if operation can be attempted."""
-        if self.state == "CLOSED":
+        if self.state == "closed":
             return True
         
-        if self.state == "OPEN":
+        if self.state == "open":
             if self.last_failure_time:
                 time_since_failure = (datetime.utcnow() - self.last_failure_time).total_seconds()
                 if time_since_failure >= self.recovery_timeout:
                     logger.info("Circuit breaker entering half-open state")
-                    self.state = "HALF_OPEN"
+                    self.state = "half-open"
                     self.success_count = 0
                     return True
             return False
         
-        # HALF_OPEN state
+        # half-open state
         return True
+    
+    def reset(self) -> None:
+        """Reset the circuit breaker to closed state."""
+        self.state = "closed"
+        self.failure_count = 0
+        self.success_count = 0
+        self.last_failure_time = None
+    
+    async def __aenter__(self):
+        """Async context manager entry."""
+        # Check if circuit breaker is open and update state
+        self.can_attempt()
+        
+        if self.state == "open":
+            raise Exception(f"Circuit breaker is OPEN, rejecting request")
+        
+        return self
+    
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """Async context manager exit."""
+        if exc_type is None:
+            # Operation succeeded
+            self.record_success()
+        else:
+            # Operation failed
+            self.record_failure()
+        
+        # Don't suppress the exception
+        return False
 
 
 # Default retry configuration

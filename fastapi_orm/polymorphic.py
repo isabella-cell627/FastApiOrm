@@ -182,8 +182,8 @@ class PolymorphicMixin:
     
     async def set_content_object(
         self,
-        session: AsyncSession,
-        obj: Any,
+        obj_or_session: Any,
+        obj: Optional[Any] = None,
         type_field: str = 'content_type',
         id_field: str = 'content_id'
     ):
@@ -191,26 +191,48 @@ class PolymorphicMixin:
         Set the object referenced by generic foreign key
         
         Args:
-            session: Database session
-            obj: Object to reference
+            obj_or_session: Object to reference, or session for backwards compatibility
+            obj: Object to reference (when first arg is session)
             type_field: Name of the type field
             id_field: Name of the ID field
+        
+        Usage:
+            # New API (no session needed):
+            comment.set_content_object(post)
+            
+            # Old API (with session):
+            await comment.set_content_object(session, post)
         """
-        if obj is None:
+        from sqlalchemy.ext.asyncio import AsyncSession
+        
+        # Determine which API is being used
+        session = None
+        target_obj = None
+        
+        if isinstance(obj_or_session, AsyncSession):
+            # Old API: set_content_object(session, obj, ...)
+            session = obj_or_session
+            target_obj = obj
+        else:
+            # New API: set_content_object(obj, ...)
+            target_obj = obj_or_session
+        
+        if target_obj is None:
             setattr(self, type_field, None)
             setattr(self, id_field, None)
         else:
-            content_type = getattr(obj, '__tablename__', obj.__class__.__name__.lower())
-            obj_id = getattr(obj, 'id', None)
+            content_type = getattr(target_obj, '__tablename__', target_obj.__class__.__name__.lower())
+            obj_id = getattr(target_obj, 'id', None)
             
             setattr(self, type_field, content_type)
             setattr(self, id_field, obj_id)
             
             # Register model
-            ContentTypeRegistry.register(obj.__class__, content_type)
+            ContentTypeRegistry.register(target_obj.__class__, content_type)
             
-            # Update instance
-            await session.flush()
+            # Flush if session was provided (old API)
+            if session:
+                await session.flush()
 
 
 class PolymorphicQuery:

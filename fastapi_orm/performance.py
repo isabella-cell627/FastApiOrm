@@ -229,6 +229,31 @@ class N1Detector:
         """Clear all warnings."""
         self._warnings.clear()
     
+    def analyze(self):
+        """Manually trigger analysis of recorded queries."""
+        self._analyze_recent_queries()
+    
+    def clear(self):
+        """Clear all query history and warnings."""
+        self._query_history.clear()
+        self._warnings.clear()
+    
+    def get_stats(self) -> Dict[str, Any]:
+        """
+        Get detector statistics.
+        
+        Returns:
+            Dictionary with query statistics
+        """
+        total_time = sum(q.duration for q in self._query_history)
+        return {
+            "total_queries": len(self._query_history),
+            "total_time": total_time,
+            "total_warnings": len(self._warnings),
+            "enabled": self.enabled,
+            "is_running": self._is_running
+        }
+    
     def get_report(self) -> Dict[str, Any]:
         """
         Get comprehensive N+1 detection report.

@@ -391,6 +391,83 @@ class RateLimiter:
     def clear_all(self) -> None:
         """Clear all rate limit data"""
         self._limiters.clear()
+    
+    async def check_rate_limit(self, user_id: str) -> bool:
+        """
+        Check if request is allowed for a specific user ID.
+        
+        Args:
+            user_id: User/client identifier
+        
+        Returns:
+            True if allowed, False if rate limit exceeded
+        """
+        # Use a single limiter instance that tracks all users internally
+        if not hasattr(self, '_shared_limiter'):
+            self._shared_limiter = self._create_limiter()
+        
+        limiter = self._shared_limiter
+        
+        if isinstance(limiter, TokenBucket):
+            return await limiter.acquire(user_id)
+        else:
+            return await limiter.acquire(user_id)
+    
+    def get_stats(self, user_id: str) -> Dict[str, Any]:
+        """
+        Get rate limit statistics for a specific user.
+        
+        Args:
+            user_id: User/client identifier
+        
+        Returns:
+            Dictionary with rate limit stats
+        """
+        if not hasattr(self, '_shared_limiter'):
+            return {
+                "limit": self.config.max_requests or self.config.requests,
+                "remaining": self.config.max_requests or self.config.requests,
+                "requests_made": 0,
+                "reset": 0
+            }
+        
+        limiter = self._shared_limiter
+        
+        if isinstance(limiter, TokenBucket):
+            tokens = limiter._client_tokens.get(user_id, {}).get('tokens', self.config.max_requests or self.config.requests)
+            return {
+                "limit": self.config.max_requests or self.config.requests,
+                "remaining": int(tokens),
+                "requests_made": int((self.config.max_requests or self.config.requests) - tokens),
+                "reset": 0
+            }
+        else:
+            count = limiter.get_count(user_id)
+            return {
+                "limit": self.config.max_requests or self.config.requests,
+                "remaining": (self.config.max_requests or self.config.requests) - count,
+                "requests_made": count,
+                "reset": int(limiter.get_reset_time(user_id))
+            }
+    
+    def reset(self, user_id: str) -> None:
+        """
+        Reset rate limit for a specific user.
+        
+        Args:
+            user_id: User/client identifier
+        """
+        if hasattr(self, '_shared_limiter'):
+            limiter = self._shared_limiter
+            # Clear user's data from the limiter
+            if isinstance(limiter, TokenBucket):
+                if user_id in limiter._client_tokens:
+                    del limiter._client_tokens[user_id]
+            elif isinstance(limiter, (SlidingWindowCounter, FixedWindowCounter)):
+                if hasattr(limiter, 'requests') and user_id in limiter.requests:
+                    del limiter.requests[user_id]
+                if hasattr(limiter, 'clients') and user_id in limiter.clients:
+                    del limiter.clients[user_id]
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
@@ -477,10 +554,11 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
 
 def rate_limit(
-    requests: int,
-    window: int,
+    requests: Optional[int] = None,
+    window: Optional[int] = None,
     strategy: str = "sliding",
-    identifier: Optional[Callable[[Request], str]] = None
+    identifier: Optional[Callable[[Request], str]] = None,
+    limiter: Optional['RateLimiter'] = None
 ):
     """
     Decorator for route-specific rate limiting.
@@ -490,6 +568,7 @@ def rate_limit(
         window: Time window in seconds
         strategy: Rate limiting strategy
         identifier: Function to identify clients
+        limiter: Existing RateLimiter instance to use
     
     Example:
         ```python
@@ -502,31 +581,53 @@ def rate_limit(
         @rate_limit(requests=10, window=60)
         async def expensive_operation(request: Request):
             return {"result": "success"}
+        
+        # Or use existing limiter:
+        my_limiter = RateLimiter(RateLimitConfig(requests=5, window=30))
+        
+        @rate_limit(limiter=my_limiter)
+        async def limited_func(user_id: str):
+            return "result"
         ```
     """
-    config = RateLimitConfig(
-        requests=requests,
-        window=window,
-        strategy=strategy,
-        identifier=identifier
-    )
-    limiter = RateLimiter(config)
+    if limiter is None:
+        if requests is None or window is None:
+            raise ValueError("Either limiter or both requests and window must be provided")
+        config = RateLimitConfig(
+            requests=requests,
+            window=window,
+            strategy=strategy,
+            identifier=identifier
+        )
+        limiter = RateLimiter(config)
     
     def decorator(func):
-        async def wrapper(request: Request, *args, **kwargs):
-            if not await limiter.is_allowed(request):
-                limit_info = limiter.get_limit_info(request)
-                raise HTTPException(
-                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                    detail=f"Rate limit exceeded. Limit: {requests} per {window}s",
-                    headers={
-                        "X-RateLimit-Limit": str(limit_info['limit']),
-                        "X-RateLimit-Remaining": str(limit_info['remaining']),
-                        "X-RateLimit-Reset": str(limit_info['reset']),
-                        "Retry-After": str(max(1, limit_info['reset']))
-                    }
-                )
-            return await func(request, *args, **kwargs)
+        async def wrapper(*args, **kwargs):
+            # Check if first arg is a Request object
+            if args and isinstance(args[0], Request):
+                request = args[0]
+                if not await limiter.is_allowed(request):
+                    limit_info = limiter.get_limit_info(request)
+                    raise HTTPException(
+                        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                        detail=f"Rate limit exceeded.",
+                        headers={
+                            "X-RateLimit-Limit": str(limit_info['limit']),
+                            "X-RateLimit-Remaining": str(limit_info['remaining']),
+                            "X-RateLimit-Reset": str(limit_info['reset']),
+                            "Retry-After": str(max(1, limit_info['reset']))
+                        }
+                    )
+            else:
+                # Non-FastAPI usage: assume first arg is user_id
+                user_id = args[0] if args else "default"
+                if not await limiter.check_rate_limit(user_id):
+                    raise HTTPException(
+                        status_code=429,
+                        detail="Rate limit exceeded"
+                    )
+            
+            return await func(*args, **kwargs)
         
         return wrapper
     
@@ -589,3 +690,19 @@ class TieredRateLimiter:
             tier = "default"
         
         return self.limiters[tier].get_limit_info(request)
+    
+    async def check_rate_limit(self, user_id: str, tier: str = "default") -> bool:
+        """
+        Check if request is allowed for a specific user ID and tier.
+        
+        Args:
+            user_id: User/client identifier
+            tier: User tier name
+        
+        Returns:
+            True if allowed, False if rate limit exceeded
+        """
+        if tier not in self.limiters:
+            tier = "default"
+        
+        return await self.limiters[tier].check_rate_limit(user_id)
