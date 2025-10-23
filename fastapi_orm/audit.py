@@ -91,7 +91,7 @@ def clear_audit_user() -> None:
     _audit_metadata.set({})
 
 
-class AuditLog(Base):
+class AuditLog(Model):
     """
     Model to store audit log entries.
     
@@ -100,24 +100,24 @@ class AuditLog(Base):
     """
     __tablename__ = "audit_logs"
     
-    id = Column(Integer, primary_key=True)
+    id: int = IntegerField(primary_key=True)
     # What was affected
-    model_name = Column(String(255), nullable=False, index=True)
-    model_id = Column(String(255), nullable=False, index=True)
+    model_name: str = StringField(max_length=255, nullable=False, index=True)
+    model_id: str = StringField(max_length=255, nullable=False, index=True)
     
     # What happened
-    operation = Column(String(50), nullable=False)  # 'create', 'update', 'delete'
+    operation: str = StringField(max_length=50, nullable=False)
     
     # Who did it
-    user_id = Column(String(255), nullable=True, index=True)
+    user_id: str = StringField(max_length=255, nullable=True, index=True)
     
     # When
-    timestamp = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    timestamp: datetime = DateTimeField(nullable=False, auto_now_add=True)
     
     # Details
-    changes = Column(JSON, nullable=True)  # For updates: old_value -> new_value
-    snapshot = Column(JSON, nullable=True)  # Full record snapshot
-    extra_data = Column(JSON, nullable=True)  # Additional context (IP, user agent, etc.)
+    changes: dict = JSONField(nullable=True)
+    snapshot: dict = JSONField(nullable=True)
+    extra_data: dict = JSONField(nullable=True)
     
     def __repr__(self):
         return f"<AuditLog {self.operation} on {self.model_name}#{self.model_id} by {self.user_id}>"
@@ -151,53 +151,74 @@ class AuditMixin:
         ```
     """
     
-    # Track whether audit hooks are registered
-    _audit_hooks_registered = False
-    
-    def __init_subclass__(cls, **kwargs):
-        """Register audit hooks when model is defined."""
-        super().__init_subclass__(**kwargs)
+    @classmethod
+    async def create(cls, session, **kwargs):
+        """Override create to add audit logging."""
+        # Call parent create method
+        from .model import Model
+        instance = await Model.create.__func__(cls, session, **kwargs)
         
-        if not cls._audit_hooks_registered:
-            from .hooks import receiver, get_signals
-            
-            signals = get_signals()
-            
-            # Register hooks for this model
-            @receiver(signals.post_save, sender=cls)
-            async def audit_save(sender, instance, created, **kwargs):
-                await _create_audit_log(
-                    instance,
-                    'create' if created else 'update',
-                    created=created
-                )
-            
-            @receiver(signals.post_delete, sender=cls)
-            async def audit_delete(sender, instance, **kwargs):
-                await _create_audit_log(instance, 'delete')
-            
-            cls._audit_hooks_registered = True
+        # Create audit log
+        await _create_audit_log_entry(session, instance, 'CREATE')
+        
+        return instance
+    
+    async def update(self, session, **kwargs):
+        """Override update to add audit logging."""
+        # Store old values for change tracking
+        old_values = {}
+        for key in kwargs.keys():
+            if key != '_audit_user_id' and hasattr(self, key):
+                old_values[key] = getattr(self, key)
+        
+        # Call parent update method
+        from .model import Model
+        await Model.update(self, session, **kwargs)
+        
+        # Track changes
+        changes = {}
+        for key, old_val in old_values.items():
+            new_val = getattr(self, key)
+            if old_val != new_val:
+                changes[key] = {
+                    'old': _serialize_value(old_val),
+                    'new': _serialize_value(new_val)
+                }
+        
+        # Create audit log only if there were changes
+        if changes:
+            await _create_audit_log_entry(session, self, 'UPDATE', changes=changes)
+    
+    async def delete(self, session, **kwargs):
+        """Override delete to add audit logging."""
+        # Extract _audit_user_id if present and set it
+        audit_user_id = kwargs.get('_audit_user_id')
+        if audit_user_id:
+            set_audit_user(audit_user_id)
+        
+        # Create audit log before deletion (after setting user)
+        await _create_audit_log_entry(session, self, 'DELETE')
+        
+        # Call parent delete method
+        from .model import Model
+        await Model.delete(self, session, **kwargs)
 
 
-async def _create_audit_log(
+async def _create_audit_log_entry(
+    session: Any,
     instance: Any,
     operation: str,
-    created: bool = False
+    changes: Optional[Dict[str, Any]] = None
 ) -> None:
     """
     Internal function to create an audit log entry.
     
     Args:
+        session: Database session
         instance: Model instance being audited
-        operation: Type of operation ('create', 'update', 'delete')
-        created: Whether this is a create operation
+        operation: Type of operation ('CREATE', 'UPDATE', 'DELETE')
+        changes: Dict of changes for UPDATE operations
     """
-    from sqlalchemy.orm import object_session
-    
-    session = object_session(instance)
-    if not session:
-        return
-    
     model_name = instance.__class__.__name__
     model_id = str(getattr(instance, 'id', 'unknown'))
     user_id = get_audit_user()
@@ -206,45 +227,22 @@ async def _create_audit_log(
     # Get current values
     current_values = instance.to_dict() if hasattr(instance, 'to_dict') else {}
     
-    # For updates, track changes
-    changes = None
-    if operation == 'update' and hasattr(instance, '__dict__'):
-        # Get modified attributes from SQLAlchemy
-        from sqlalchemy import inspect
-        inspector = inspect(instance)
-        
-        changes = {}
-        for attr in inspector.attrs:
-            history = attr.load_history()
-            if history.has_changes():
-                field_name = attr.key
-                old_value = history.deleted[0] if history.deleted else None
-                new_value = history.added[0] if history.added else None
-                
-                # Skip if values are the same
-                if old_value != new_value:
-                    changes[field_name] = {
-                        'old': _serialize_value(old_value),
-                        'new': _serialize_value(new_value)
-                    }
-        
-        # If no changes detected, don't create audit log
-        if not changes:
-            return
+    # Create audit log entry directly using SQL operations to avoid recursion
+    from sqlalchemy import insert
     
-    # Create audit log entry
-    audit_entry = AuditLog(
-        model_name=model_name,
-        model_id=model_id,
-        operation=operation,
-        user_id=user_id,
-        timestamp=datetime.utcnow(),
-        changes=changes,
-        snapshot=current_values if operation in ['create', 'delete'] else None,
-        extra_data=metadata if metadata else None
-    )
+    audit_data = {
+        'model_name': model_name,
+        'model_id': model_id,
+        'operation': operation,
+        'user_id': user_id,
+        'changes': changes,
+        'snapshot': current_values if operation in ['CREATE', 'DELETE'] else None,
+        'extra_data': metadata if metadata else None
+    }
     
-    session.add(audit_entry)
+    # Insert directly to avoid triggering audit hooks again
+    audit_log = AuditLog(**audit_data)
+    session.add(audit_log)
     await session.flush()
 
 
@@ -264,17 +262,17 @@ def _serialize_value(value: Any) -> Any:
 
 async def get_audit_trail(
     session: AsyncSession,
-    model_class: Type[Model],
+    model_class_or_name: Any,
     model_id: Any,
     limit: Optional[int] = None,
     operation: Optional[str] = None
-) -> List[Dict[str, Any]]:
+) -> List[Any]:
     """
     Get the audit trail for a specific record.
     
     Args:
         session: Database session
-        model_class: Model class
+        model_class_or_name: Model class or model name string
         model_id: ID of the record
         limit: Maximum number of entries to return
         operation: Filter by operation type ('create', 'update', 'delete')
@@ -294,34 +292,28 @@ async def get_audit_trail(
         recent = await get_audit_trail(session, Product, 123, limit=10)
         ```
     """
-    query = select(AuditLog).where(
-        AuditLog.model_name == model_class.__name__,
-        AuditLog.model_id == str(model_id)
-    ).order_by(AuditLog.timestamp.desc())
+    # Handle both model class and string name
+    if isinstance(model_class_or_name, str):
+        model_name = model_class_or_name
+    else:
+        model_name = model_class_or_name.__name__
+    
+    filters = {
+        'model_name': model_name,
+        'model_id': str(model_id)
+    }
     
     if operation:
-        query = query.where(AuditLog.operation == operation)
+        filters['operation'] = operation.upper()
     
-    if limit:
-        query = query.limit(limit)
+    logs = await AuditLog.filter_by(
+        session,
+        order_by='-timestamp',
+        limit=limit,
+        **filters
+    )
     
-    result = await session.execute(query)
-    logs = result.scalars().all()
-    
-    return [
-        {
-            'id': log.id,
-            'model_name': log.model_name,
-            'model_id': log.model_id,
-            'operation': log.operation,
-            'user_id': log.user_id,
-            'timestamp': log.timestamp.isoformat(),
-            'changes': log.changes,
-            'snapshot': log.snapshot,
-            'metadata': log.extra_data
-        }
-        for log in logs
-    ]
+    return logs
 
 
 async def get_user_activity(

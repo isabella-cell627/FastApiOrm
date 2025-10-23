@@ -113,5 +113,5 @@ def create_check_constraint(
     Example:
         ck = create_check_constraint("products", "price > 0", name="positive_price")
     """
-    constraint_name = name or f"ck_{table_name}_{condition.replace(' ', '_')[:30]}"
+    constraint_name = name or f"ck_{table_name}"
     return CheckConstraint(condition, name=constraint_name)

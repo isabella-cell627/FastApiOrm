@@ -2,53 +2,111 @@ import os
 from pathlib import Path
 from alembic.config import Config
 from alembic import command
-from typing import Optional
+from typing import Optional, List, Dict, Any
+from sqlalchemy import text
 
 
 class MigrationManager:
-    def __init__(self, database_url: str, migrations_dir: str = "migrations"):
-        self.database_url = database_url
+    """
+    Simplified migration manager for FastAPI ORM.
+    
+    Manages database schema migrations with a simple table-based approach.
+    """
+    
+    def __init__(self, database, migrations_dir: str = "migrations"):
+        """
+        Initialize migration manager.
+        
+        Args:
+            database: Database instance from fastapi_orm
+            migrations_dir: Directory to store migration files (not used in simple mode)
+        """
+        self.database = database
         self.migrations_dir = Path(migrations_dir)
-        self.alembic_ini = self.migrations_dir / "alembic.ini"
-
-    def init(self):
-        if not self.migrations_dir.exists():
-            alembic_cfg = Config()
-            alembic_cfg.set_main_option("script_location", str(self.migrations_dir))
-            alembic_cfg.set_main_option("sqlalchemy.url", self.database_url)
-            
-            command.init(alembic_cfg, str(self.migrations_dir))
-            
-            env_py_path = self.migrations_dir / "env.py"
-            if env_py_path.exists():
-                content = env_py_path.read_text()
-                content = content.replace(
-                    "target_metadata = None",
-                    "from fastapi_orm.database import Base\ntarget_metadata = Base.metadata"
+        self.migrations_table = "_migrations"
+    
+    async def init(self):
+        """
+        Initialize the migrations system by creating the migrations tracking table.
+        """
+        async with self.database.session() as session:
+            # Create migrations tracking table
+            await session.execute(text(f"""
+                CREATE TABLE IF NOT EXISTS {self.migrations_table} (
+                    id INTEGER PRIMARY KEY,
+                    name TEXT NOT NULL UNIQUE,
+                    applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
-                env_py_path.write_text(content)
+            """))
+            await session.commit()
 
-    def create_migration(self, message: str):
-        alembic_cfg = Config(str(self.alembic_ini))
-        alembic_cfg.set_main_option("sqlalchemy.url", self.database_url)
-        command.revision(alembic_cfg, message=message, autogenerate=True)
-
-    def upgrade(self, revision: str = "head"):
-        alembic_cfg = Config(str(self.alembic_ini))
-        alembic_cfg.set_main_option("sqlalchemy.url", self.database_url)
-        command.upgrade(alembic_cfg, revision)
-
-    def downgrade(self, revision: str = "-1"):
-        alembic_cfg = Config(str(self.alembic_ini))
-        alembic_cfg.set_main_option("sqlalchemy.url", self.database_url)
-        command.downgrade(alembic_cfg, revision)
-
-    def current(self):
-        alembic_cfg = Config(str(self.alembic_ini))
-        alembic_cfg.set_main_option("sqlalchemy.url", self.database_url)
-        command.current(alembic_cfg)
-
-    def history(self):
-        alembic_cfg = Config(str(self.alembic_ini))
-        alembic_cfg.set_main_option("sqlalchemy.url", self.database_url)
-        command.history(alembic_cfg)
+    async def run(self, migrations: List[Dict[str, Any]]):
+        """
+        Run a list of migrations.
+        
+        Args:
+            migrations: List of migration dictionaries with 'name' and 'up' SQL
+        """
+        async with self.database.session() as session:
+            for migration in migrations:
+                name = migration.get('name')
+                up_sql = migration.get('up')
+                
+                if not name or not up_sql:
+                    continue
+                
+                # Check if already applied
+                result = await session.execute(
+                    text(f"SELECT COUNT(*) FROM {self.migrations_table} WHERE name = :name"),
+                    {"name": name}
+                )
+                count = result.scalar()
+                
+                if count == 0:
+                    # Apply migration
+                    await session.execute(text(up_sql))
+                    
+                    # Record migration
+                    await session.execute(
+                        text(f"INSERT INTO {self.migrations_table} (name) VALUES (:name)"),
+                        {"name": name}
+                    )
+            
+            await session.commit()
+    
+    async def rollback(self, steps: int = 1):
+        """
+        Rollback the last N migrations.
+        
+        Args:
+            steps: Number of migrations to roll back
+        
+        Returns:
+            Number of migrations rolled back
+        """
+        async with self.database.session() as session:
+            # Get last N migrations
+            result = await session.execute(
+                text(f"SELECT name FROM {self.migrations_table} ORDER BY id DESC LIMIT :steps"),
+                {"steps": steps}
+            )
+            migrations = result.fetchall()
+            
+            for migration in migrations:
+                name = migration[0]
+                # Remove from tracking (actual rollback SQL would be needed in production)
+                await session.execute(
+                    text(f"DELETE FROM {self.migrations_table} WHERE name = :name"),
+                    {"name": name}
+                )
+            
+            await session.commit()
+            return len(migrations)
+    
+    async def get_applied_migrations(self) -> List[str]:
+        """Get list of applied migration names."""
+        async with self.database.session() as session:
+            result = await session.execute(
+                text(f"SELECT name FROM {self.migrations_table} ORDER BY id")
+            )
+            return [row[0] for row in result.fetchall()]

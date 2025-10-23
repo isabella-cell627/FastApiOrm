@@ -152,6 +152,15 @@ class QueryMonitor:
             return queries[:limit]
         return queries
     
+    def get_all_queries(self) -> List[Dict[str, Any]]:
+        """
+        Get all tracked queries.
+        
+        Returns:
+            List of all query info dictionaries
+        """
+        return self._queries.copy()
+    
     def clear(self) -> None:
         """Clear all tracked queries"""
         self._queries.clear()

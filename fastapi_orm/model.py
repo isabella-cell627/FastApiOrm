@@ -83,6 +83,12 @@ class Model(Base, metaclass=ModelMeta):
         Returns:
             Created model instance
         """
+        # Extract _audit_user_id if present
+        audit_user_id = kwargs.pop('_audit_user_id', None)
+        if audit_user_id:
+            from fastapi_orm.audit import set_audit_user
+            set_audit_user(audit_user_id)
+        
         instance = cls(**kwargs)
         session.add(instance)
         await session.flush()
@@ -366,6 +372,12 @@ class Model(Base, metaclass=ModelMeta):
             session: AsyncSession instance
             **kwargs: Field names and new values
         """
+        # Extract _audit_user_id if present
+        audit_user_id = kwargs.pop('_audit_user_id', None)
+        if audit_user_id:
+            from fastapi_orm.audit import set_audit_user
+            set_audit_user(audit_user_id)
+        
         for key, value in kwargs.items():
             setattr(self, key, value)
         await session.flush()
@@ -393,13 +405,20 @@ class Model(Base, metaclass=ModelMeta):
             await instance.update(session, **kwargs)
         return instance
     
-    async def delete(self, session: AsyncSession) -> None:
+    async def delete(self, session: AsyncSession, **kwargs) -> None:
         """
         Delete this instance.
         
         Args:
             session: AsyncSession instance
+            **kwargs: Optional parameters including _audit_user_id
         """
+        # Extract _audit_user_id if present
+        audit_user_id = kwargs.pop('_audit_user_id', None)
+        if audit_user_id:
+            from fastapi_orm.audit import set_audit_user
+            set_audit_user(audit_user_id)
+        
         await session.delete(self)
         await session.flush()
     

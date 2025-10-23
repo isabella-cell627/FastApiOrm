@@ -44,6 +44,27 @@ class SoftDeleteMixin:
     
     deleted_at = DateTimeField(nullable=True)
     
+    def __init_subclass__(cls, **kwargs):
+        """Override query methods to add soft delete filtering"""
+        super().__init_subclass__(**kwargs)
+        
+        # Store original methods from parent classes
+        original_all = cls.all
+        original_get = cls.get  
+        original_filter_by = cls.filter_by
+        original_count = cls.count
+        original_exists = cls.exists
+        original_paginate = getattr(cls, 'paginate', None)
+        
+        # Override with soft-delete-aware versions
+        cls.all = classmethod(SoftDeleteMixin._all.__func__)
+        cls.get = classmethod(SoftDeleteMixin._get.__func__)
+        cls.filter_by = classmethod(SoftDeleteMixin._filter_by.__func__)
+        cls.count = classmethod(SoftDeleteMixin._count.__func__)
+        cls.exists = classmethod(SoftDeleteMixin._exists.__func__)
+        if original_paginate:
+            cls.paginate = classmethod(SoftDeleteMixin._paginate.__func__)
+    
     async def soft_delete(self, session: AsyncSession) -> None:
         """Mark this record as deleted"""
         self.deleted_at = datetime.utcnow()
@@ -62,7 +83,7 @@ class SoftDeleteMixin:
         return self.deleted_at is not None
     
     @classmethod
-    async def all(cls: Type[T], session: AsyncSession, limit: Optional[int] = None, offset: int = 0) -> List[T]:
+    async def _all(cls: Type[T], session: AsyncSession, limit: Optional[int] = None, offset: int = 0) -> List[T]:
         """Get all non-deleted records"""
         query = select(cls).where(cls.deleted_at.is_(None)).offset(offset)
         if limit:
@@ -71,7 +92,7 @@ class SoftDeleteMixin:
         return list(result.scalars().all())
     
     @classmethod
-    async def get(cls: Type[T], session: AsyncSession, id: int) -> Optional[T]:
+    async def _get(cls: Type[T], session: AsyncSession, id: int) -> Optional[T]:
         """Get a non-deleted record by ID"""
         result = await session.execute(
             select(cls).where(cls.id == id).where(cls.deleted_at.is_(None))
@@ -97,7 +118,7 @@ class SoftDeleteMixin:
         return list(result.scalars().all())
     
     @classmethod
-    async def filter_by(
+    async def _filter_by(
         cls: Type[T],
         session: AsyncSession,
         order_by: Optional[Union[str, List[str]]] = None,
@@ -166,7 +187,7 @@ class SoftDeleteMixin:
         return list(result.scalars().all())
     
     @classmethod
-    async def count(cls: Type[T], session: AsyncSession, **filters) -> int:
+    async def _count(cls: Type[T], session: AsyncSession, **filters) -> int:
         """Count non-deleted records"""
         query = select(func.count()).select_from(cls).where(cls.deleted_at.is_(None))
         for key, value in filters.items():
@@ -175,7 +196,7 @@ class SoftDeleteMixin:
         return result.scalar_one()
     
     @classmethod
-    async def exists(cls: Type[T], session: AsyncSession, **filters) -> bool:
+    async def _exists(cls: Type[T], session: AsyncSession, **filters) -> bool:
         """Check if non-deleted record exists"""
         query = select(cls).where(cls.deleted_at.is_(None))
         for key, value in filters.items():
@@ -203,7 +224,7 @@ class SoftDeleteMixin:
         return instance, True
     
     @classmethod
-    async def paginate(
+    async def _paginate(
         cls: Type[T],
         session: AsyncSession,
         page: int = 1,
@@ -213,14 +234,14 @@ class SoftDeleteMixin:
     ) -> Dict[str, Any]:
         """Paginate non-deleted records"""
         offset = (page - 1) * page_size
-        items = await cls.filter_by(
+        items = await cls._filter_by(
             session, 
             order_by=order_by, 
             limit=page_size, 
             offset=offset, 
             **filters
         )
-        total = await cls.count(session, **filters)
+        total = await cls._count(session, **filters)
         
         return {
             "items": items,

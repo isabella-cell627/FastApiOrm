@@ -137,12 +137,13 @@ class JSONPathExists:
         return f"json_path_exists({self.path!r})"
 
 
-def json_contains(value: Union[Dict, List, Any]) -> JSONContains:
+def json_contains(value: Union[Dict, List, Any], *args) -> JSONContains:
     """
     Create a JSON containment query operator.
     
     Args:
         value: The value to check for containment
+        *args: Additional arguments (ignored for compatibility)
     
     Returns:
         JSONContains operator
