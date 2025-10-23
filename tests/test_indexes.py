@@ -125,6 +125,7 @@ async def test_unique_index(db):
             )
             assert False, "Should have raised unique constraint error"
         except Exception:
+            await session.rollback()
             pass
 
 

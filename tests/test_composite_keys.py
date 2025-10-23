@@ -104,6 +104,7 @@ async def test_composite_primary_key_uniqueness(db):
             )
             pytest.fail("Should have raised unique constraint violation")
         except Exception as e:
+            await session.rollback()
             assert "unique" in str(e).lower() or "constraint" in str(e).lower() or "primary" in str(e).lower()
 
 
@@ -224,6 +225,7 @@ async def test_composite_unique_constraint(db):
             )
             pytest.fail("Should have raised unique constraint violation")
         except Exception as e:
+            await session.rollback()
             assert "unique" in str(e).lower() or "constraint" in str(e).lower()
 
 

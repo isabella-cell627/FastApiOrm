@@ -57,3 +57,13 @@ pytest
 pytest-asyncio
 sqlalchemy
 uvicorn
+aiosqlite
+alembic
+asyncpg
+fastapi
+httpx
+pydantic
+pytest
+pytest-asyncio
+sqlalchemy
+uvicorn
