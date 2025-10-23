@@ -162,6 +162,12 @@ class HooksMixin:
 
 async def trigger_pre_save(sender: type, instance: "Model", **kwargs) -> None:
     """Trigger pre_save hooks and signals."""
+    # Call instance hook method if exists
+    if hasattr(instance, 'pre_save') and callable(getattr(instance, 'pre_save')):
+        method = getattr(instance, 'pre_save')
+        if asyncio.iscoroutinefunction(method):
+            await method(kwargs.get('session'))
+    
     # Call class hook method
     if hasattr(sender, 'pre_save_hook'):
         await sender.pre_save_hook(instance, **kwargs)
@@ -172,6 +178,12 @@ async def trigger_pre_save(sender: type, instance: "Model", **kwargs) -> None:
 
 async def trigger_post_save(sender: type, instance: "Model", created: bool = False, **kwargs) -> None:
     """Trigger post_save hooks and signals."""
+    # Call instance hook method if exists
+    if hasattr(instance, 'post_save') and callable(getattr(instance, 'post_save')):
+        method = getattr(instance, 'post_save')
+        if asyncio.iscoroutinefunction(method):
+            await method(kwargs.get('session'), created)
+    
     # Call class hook method
     if hasattr(sender, 'post_save_hook'):
         await sender.post_save_hook(instance, created=created, **kwargs)
@@ -182,6 +194,12 @@ async def trigger_post_save(sender: type, instance: "Model", created: bool = Fal
 
 async def trigger_pre_update(sender: type, instance: "Model", **kwargs) -> None:
     """Trigger pre_update hooks and signals."""
+    # Call instance hook method if exists
+    if hasattr(instance, 'pre_update') and callable(getattr(instance, 'pre_update')):
+        method = getattr(instance, 'pre_update')
+        if asyncio.iscoroutinefunction(method):
+            await method(kwargs.get('session'))
+    
     # Call class hook method
     if hasattr(sender, 'pre_update_hook'):
         await sender.pre_update_hook(instance, **kwargs)
@@ -192,6 +210,12 @@ async def trigger_pre_update(sender: type, instance: "Model", **kwargs) -> None:
 
 async def trigger_post_update(sender: type, instance: "Model", **kwargs) -> None:
     """Trigger post_update hooks and signals."""
+    # Call instance hook method if exists
+    if hasattr(instance, 'post_update') and callable(getattr(instance, 'post_update')):
+        method = getattr(instance, 'post_update')
+        if asyncio.iscoroutinefunction(method):
+            await method(kwargs.get('session'))
+    
     # Call class hook method
     if hasattr(sender, 'post_update_hook'):
         await sender.post_update_hook(instance, **kwargs)
@@ -202,6 +226,12 @@ async def trigger_post_update(sender: type, instance: "Model", **kwargs) -> None
 
 async def trigger_pre_delete(sender: type, instance: "Model", **kwargs) -> None:
     """Trigger pre_delete hooks and signals."""
+    # Call instance hook method if exists
+    if hasattr(instance, 'pre_delete') and callable(getattr(instance, 'pre_delete')):
+        method = getattr(instance, 'pre_delete')
+        if asyncio.iscoroutinefunction(method):
+            await method(kwargs.get('session'))
+    
     # Call class hook method
     if hasattr(sender, 'pre_delete_hook'):
         await sender.pre_delete_hook(instance, **kwargs)
@@ -212,6 +242,12 @@ async def trigger_pre_delete(sender: type, instance: "Model", **kwargs) -> None:
 
 async def trigger_post_delete(sender: type, instance: "Model", **kwargs) -> None:
     """Trigger post_delete hooks and signals."""
+    # Call instance hook method if exists
+    if hasattr(instance, 'post_delete') and callable(getattr(instance, 'post_delete')):
+        method = getattr(instance, 'post_delete')
+        if asyncio.iscoroutinefunction(method):
+            await method(kwargs.get('session'))
+    
     # Call class hook method
     if hasattr(sender, 'post_delete_hook'):
         await sender.post_delete_hook(instance, **kwargs)

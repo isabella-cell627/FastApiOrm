@@ -175,11 +175,11 @@ async def test_subquery(db, sample_employees):
         qb = QueryBuilder(Employee)
         
         avg_salary_subquery = qb.select(
-            func.avg(Employee.salary)
+            func.avg(Employee.salary).label('avg_salary')
         ).subquery()
         
         results = await QueryBuilder(Employee).select().where(
-            Employee.salary > avg_salary_subquery.c.anon_1
+            Employee.salary > avg_salary_subquery.c.avg_salary
         ).all(session)
         
         assert len(results) >= 2

@@ -69,6 +69,7 @@ class QueryBuilder:
         self.model = model
         self._query = select(model)
         self._ctes: List[CTE] = []
+        self._has_explicit_select = False  # Track if .select() was called
     
     def select(self, *columns) -> 'QueryBuilder':
         """
@@ -82,6 +83,7 @@ class QueryBuilder:
         """
         if columns:
             self._query = select(*columns)
+            self._has_explicit_select = True  # Mark that explicit columns were selected
         else:
             self._query = select(self.model)
         return self
@@ -319,7 +321,16 @@ class QueryBuilder:
         """
         query = self.build()
         result = await session.execute(query)
-        return list(result.scalars().all())
+        
+        # Check if we're selecting specific columns or full entities
+        # If .select() was explicitly called with columns, return Row objects
+        # Otherwise return model instances
+        if self._has_explicit_select:
+            # Explicit column selection, return Row objects
+            return list(result.all())
+        else:
+            # Entity query (selecting the full model), return model instances
+            return list(result.scalars().all())
     
     async def first(self, session: AsyncSession) -> Optional[T]:
         """

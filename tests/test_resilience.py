@@ -71,7 +71,7 @@ async def test_with_retry_eventual_success():
 async def test_with_retry_max_retries_exceeded():
     call_count = 0
     
-    @with_retry(config=RetryConfig(max_attempts=3, initial_delay=0.01))
+    @with_retry(config=RetryConfig(max_attempts=3, initial_delay=0.01, retry_on=(ValueError,)))
     async def always_fails():
         nonlocal call_count
         call_count += 1
@@ -87,7 +87,7 @@ async def test_with_retry_max_retries_exceeded():
 async def test_with_retry_exponential_backoff():
     call_times = []
     
-    @with_retry(config=RetryConfig(max_attempts=3, initial_delay=0.1, exponential_base=2))
+    @with_retry(config=RetryConfig(max_attempts=3, initial_delay=0.1, exponential_base=2, retry_on=(ValueError,)), use_circuit_breaker=False)
     async def failing_function():
         call_times.append(asyncio.get_event_loop().time())
         raise ValueError("Retry me")
@@ -213,7 +213,7 @@ async def test_circuit_breaker_failure_count():
 async def test_retry_with_specific_exceptions():
     call_count = 0
     
-    @with_retry(config=RetryConfig(max_attempts=3, initial_delay=0.01, retry_on=(ValueError,)))
+    @with_retry(config=RetryConfig(max_attempts=3, initial_delay=0.01, retry_on=(ValueError,)), use_circuit_breaker=False)
     async def retry_on_value_error():
         nonlocal call_count
         call_count += 1

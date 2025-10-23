@@ -126,6 +126,38 @@ class TenantMixin:
                     f"Call set_current_tenant() first."
                 )
             target.tenant_id = current_tenant
+    
+    @classmethod
+    async def get(cls, session: AsyncSession, id: Any):
+        """Get a record by ID, filtered by current tenant."""
+        tenant_id = get_current_tenant()
+        if tenant_id:
+            return await cls.get_by(session, id=id, tenant_id=tenant_id)
+        return await super().get(session, id)
+    
+    @classmethod
+    async def filter_by(cls, session: AsyncSession, **filters):
+        """Filter records, automatically adding tenant_id filter."""
+        tenant_id = get_current_tenant()
+        if tenant_id:
+            filters['tenant_id'] = tenant_id
+        return await super().filter_by(session, **filters)
+    
+    @classmethod
+    async def all(cls, session: AsyncSession, limit: Optional[int] = None, offset: int = 0):
+        """Get all records, filtered by current tenant."""
+        tenant_id = get_current_tenant()
+        if tenant_id:
+            return await cls.filter_by(session, limit=limit, offset=offset)
+        return await super().all(session, limit=limit, offset=offset)
+    
+    @classmethod
+    async def count(cls, session: AsyncSession, **filters):
+        """Count records, filtered by current tenant."""
+        tenant_id = get_current_tenant()
+        if tenant_id:
+            filters['tenant_id'] = tenant_id
+        return await super().count(session, **filters)
 
 
 class TenantIsolationError(Exception):

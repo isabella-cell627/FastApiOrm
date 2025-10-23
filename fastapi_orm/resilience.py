@@ -36,7 +36,8 @@ class RetryConfig:
         initial_delay: float = 0.1,
         max_delay: float = 10.0,
         exponential_base: float = 2.0,
-        jitter: bool = True
+        jitter: bool = True,
+        retry_on: Optional[tuple] = None
     ):
         """
         Initialize retry configuration.
@@ -47,12 +48,14 @@ class RetryConfig:
             max_delay: Maximum delay between retries in seconds
             exponential_base: Base for exponential backoff
             jitter: Whether to add random jitter to delays
+            retry_on: Tuple of exception types to retry on (if None, uses transient error detection)
         """
         self.max_attempts = max_attempts
         self.initial_delay = initial_delay
         self.max_delay = max_delay
         self.exponential_base = exponential_base
         self.jitter = jitter
+        self.retry_on = retry_on
 
 
 class CircuitBreaker:
@@ -89,15 +92,26 @@ class CircuitBreaker:
         self.failure_count = 0
         self.success_count = 0
         self.last_failure_time: Optional[datetime] = None
-        self.state = "closed"
+        self._state = "closed"
+    
+    @property
+    def state(self) -> str:
+        """Get the current state of the circuit breaker, updating it if necessary."""
+        self.can_attempt()
+        return self._state
+    
+    @state.setter
+    def state(self, value: str):
+        """Set the circuit breaker state."""
+        self._state = value
     
     def record_success(self) -> None:
         """Record a successful operation."""
-        if self.state == "half-open":
+        if self._state == "half-open":
             self.success_count += 1
             if self.success_count >= self.half_open_attempts:
                 logger.info("Circuit breaker closing after successful recovery")
-                self.state = "closed"
+                self._state = "closed"
                 self.failure_count = 0
                 self.success_count = 0
         else:
@@ -109,23 +123,23 @@ class CircuitBreaker:
         self.last_failure_time = datetime.utcnow()
         
         if self.failure_count >= self.failure_threshold:
-            if self.state != "open":
+            if self._state != "open":
                 logger.warning(
                     f"Circuit breaker opening after {self.failure_count} failures"
                 )
-            self.state = "open"
+            self._state = "open"
     
     def can_attempt(self) -> bool:
         """Check if operation can be attempted."""
-        if self.state == "closed":
+        if self._state == "closed":
             return True
         
-        if self.state == "open":
+        if self._state == "open":
             if self.last_failure_time:
                 time_since_failure = (datetime.utcnow() - self.last_failure_time).total_seconds()
                 if time_since_failure >= self.recovery_timeout:
                     logger.info("Circuit breaker entering half-open state")
-                    self.state = "half-open"
+                    self._state = "half-open"
                     self.success_count = 0
                     return True
             return False
@@ -135,17 +149,31 @@ class CircuitBreaker:
     
     def reset(self) -> None:
         """Reset the circuit breaker to closed state."""
-        self.state = "closed"
+        self._state = "closed"
         self.failure_count = 0
         self.success_count = 0
         self.last_failure_time = None
     
+    def get_stats(self) -> dict:
+        """
+        Get circuit breaker statistics.
+        
+        Returns:
+            Dictionary containing state, failure_count, and success_count
+        """
+        # Update state before returning stats
+        self.can_attempt()
+        return {
+            "state": self.state,
+            "failure_count": self.failure_count,
+            "success_count": self.success_count,
+            "last_failure_time": self.last_failure_time
+        }
+    
     async def __aenter__(self):
         """Async context manager entry."""
         # Check if circuit breaker is open and update state
-        self.can_attempt()
-        
-        if self.state == "open":
+        if not self.can_attempt():
             raise Exception(f"Circuit breaker is OPEN, rejecting request")
         
         return self
@@ -262,7 +290,9 @@ def with_retry(
         user = await create_user(session, "john", "john@example.com")
     """
     retry_config = config or DEFAULT_RETRY_CONFIG
-    attempts = max_attempts if max_attempts is not None else retry_config.max_attempts
+    max_tries = max_attempts if max_attempts is not None else retry_config.max_attempts
+    # Total tries = initial attempt + retries
+    total_attempts = max_tries + 1
     
     def decorator(func: Callable) -> Callable:
         @wraps(func)
@@ -270,7 +300,7 @@ def with_retry(
             circuit_breaker = _circuit_breaker if use_circuit_breaker else None
             last_exception = None
             
-            for attempt in range(attempts):
+            for attempt in range(total_attempts):
                 # Check circuit breaker
                 if circuit_breaker and not circuit_breaker.can_attempt():
                     raise Exception(
@@ -296,7 +326,15 @@ def with_retry(
                     last_exception = e
                     
                     # Check if error is worth retrying
-                    if not is_transient_error(e):
+                    should_retry = False
+                    if retry_config.retry_on:
+                        # If retry_on is specified, only retry those exception types
+                        should_retry = isinstance(e, retry_config.retry_on)
+                    else:
+                        # Otherwise use transient error detection
+                        should_retry = is_transient_error(e)
+                    
+                    if not should_retry:
                         logger.warning(
                             f"{func.__name__} failed with non-transient error: {e}"
                         )
@@ -307,14 +345,14 @@ def with_retry(
                         circuit_breaker.record_failure()
                     
                     # Log retry attempt
-                    if attempt < attempts - 1:
+                    if attempt < total_attempts - 1:
                         logger.warning(
-                            f"{func.__name__} failed on attempt {attempt + 1}/{attempts}: {e}"
+                            f"{func.__name__} failed on attempt {attempt + 1}/{total_attempts}: {e}"
                         )
                         await exponential_backoff(attempt, retry_config)
                     else:
                         logger.error(
-                            f"{func.__name__} failed after {attempts} attempts: {e}"
+                            f"{func.__name__} failed after {total_attempts} attempts: {e}"
                         )
             
             # All attempts failed

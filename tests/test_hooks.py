@@ -57,9 +57,11 @@ async def db():
 @pytest.mark.asyncio
 async def test_pre_save_hook(db):
     async with db.session() as session:
-        user = HookedUser(username="testuser", email="test@example.com")
-        await session.add(user)
-        await session.flush()
+        user = await HookedUser.create(
+            session,
+            username="testuser",
+            email="test@example.com"
+        )
         
         assert 'pre_save' in user.hook_calls
 

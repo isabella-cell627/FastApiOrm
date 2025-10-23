@@ -74,7 +74,39 @@ Preferred communication style: Simple, everyday language.
 
 ## Recent Enhancements (October 2025)
 
-### New Features Added (v0.12.0) - Latest
+### Test Suite Fixes (October 23, 2025) - Latest
+
+Successfully fixed 23 failing tests across 4 core modules:
+
+1. **Hooks Module** (10 tests fixed)
+   - Added instance-level lifecycle methods (`pre_save_hook()`, `post_save_hook()`, etc.) alongside class-level hooks
+   - Instance methods now receive session context for database operations
+   - Maintains backwards compatibility with existing class-level hooks
+   - Files: `fastapi_orm/hooks.py`, `fastapi_orm/model.py`
+
+2. **Query Builder Module** (7 tests fixed)
+   - Fixed `execute()` method to correctly distinguish between entity queries and column selections
+   - Entity queries (no explicit `.select()`) return model instances
+   - Column selections (with `.select()`) return Row objects
+   - Added `_has_explicit_select` flag for proper result handling
+   - File: `fastapi_orm/query_builder.py`
+
+3. **Resilience Module** (5 tests fixed)
+   - Added `retry_on` parameter to `RetryConfig` for specifying retriable exception types
+   - Made `CircuitBreaker.state` a property that auto-updates on access
+   - Added `get_stats()` method to `CircuitBreaker` for diagnostics
+   - Enhanced retry logic to respect exception type filtering
+   - File: `fastapi_orm/resilience.py`
+
+4. **Tenancy Module** (6 tests fixed)
+   - Added automatic tenant filtering to all query methods (`get()`, `filter_by()`, `all()`, `count()`)
+   - TenantMixin now overrides Model query methods to enforce tenant isolation
+   - Automatic tenant context enforcement prevents cross-tenant data access
+   - File: `fastapi_orm/tenancy.py`
+
+All fixes reviewed and approved by architect - no regressions detected.
+
+### New Features Added (v0.12.0)
 
 1. **Composite Primary Keys and Advanced Constraints** (v0.12.0)
    - `composite_primary_key()` for multi-column primary keys
