@@ -34,6 +34,7 @@ async def db():
 @pytest.mark.asyncio
 async def test_create_view(db):
     """Test creating a database view"""
+    from sqlalchemy import text
     view_mgr = ViewManager(db.engine)
     
     await view_mgr.create_view(
@@ -43,9 +44,10 @@ async def test_create_view(db):
     
     async with db.session() as session:
         result = await session.execute(
-            session.query(session.text("SELECT * FROM active_users"))
+            text("SELECT * FROM active_users")
         )
-        assert True
+        rows = result.fetchall()
+        assert len(rows) == 2
 
 
 @pytest.mark.asyncio

@@ -38,10 +38,7 @@ class Book(TestModel):
     tags = ManyToMany("Tag", secondary="book_tags", back_populates="books")
 
 
-from sqlalchemy.orm import declarative_base
-Base = declarative_base()
-
-book_tags = create_association_table("book_tags", "rel_books", "rel_tags", Base)
+book_tags = create_association_table("book_tags", "rel_books", "rel_tags", TestBase)
 
 
 class Tag(TestModel):

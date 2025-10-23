@@ -81,7 +81,7 @@ class ViewManager:
         Args:
             name: View name
             select_statement: SELECT statement for the view
-            or_replace: Use CREATE OR REPLACE VIEW
+            or_replace: Use CREATE OR REPLACE VIEW (PostgreSQL) or DROP + CREATE (SQLite)
         
         Example:
             ```python
@@ -91,10 +91,24 @@ class ViewManager:
             )
             ```
         """
-        replace_clause = "OR REPLACE " if or_replace else ""
-        sql = f"CREATE {replace_clause}VIEW {name} AS {select_statement}"
-        
         async with self.engine.begin() as conn:
+            # Check if it's SQLite
+            dialect_name = conn.dialect.name
+            
+            if or_replace:
+                if dialect_name == "sqlite":
+                    # SQLite doesn't support CREATE OR REPLACE VIEW, so drop first
+                    try:
+                        await conn.execute(text(f"DROP VIEW IF EXISTS {name}"))
+                    except Exception:
+                        pass
+                    sql = f"CREATE VIEW {name} AS {select_statement}"
+                else:
+                    # PostgreSQL and other databases support CREATE OR REPLACE
+                    sql = f"CREATE OR REPLACE VIEW {name} AS {select_statement}"
+            else:
+                sql = f"CREATE VIEW {name} AS {select_statement}"
+            
             await conn.execute(text(sql))
         
         logger.info(f"Created view: {name}")

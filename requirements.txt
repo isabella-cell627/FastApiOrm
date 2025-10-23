@@ -37,3 +37,13 @@ pytest-asyncio
 httpx
 pytest
 pytest-asyncio
+aiosqlite
+alembic
+asyncpg
+fastapi
+httpx
+pydantic
+pytest
+pytest-asyncio
+sqlalchemy
+uvicorn

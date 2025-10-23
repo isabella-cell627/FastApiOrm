@@ -11,6 +11,10 @@ class MockWebSocket:
     def __init__(self):
         self.messages = []
         self.closed = False
+        self.accepted = False
+    
+    async def accept(self):
+        self.accepted = True
     
     async def send_text(self, message: str):
         if not self.closed:
@@ -29,7 +33,7 @@ async def test_connection_manager_connect():
     manager = ConnectionManager()
     ws = MockWebSocket()
     
-    await manager.connect("user1", ws)
+    await manager.connect(ws, "user1")
     
     assert len(manager.get_active_connections()) == 1
 
@@ -39,7 +43,7 @@ async def test_connection_manager_disconnect():
     manager = ConnectionManager()
     ws = MockWebSocket()
     
-    await manager.connect("user1", ws)
+    await manager.connect(ws, "user1")
     await manager.disconnect("user1")
     
     assert len(manager.get_active_connections()) == 0
@@ -50,7 +54,7 @@ async def test_connection_manager_send_personal_message():
     manager = ConnectionManager()
     ws = MockWebSocket()
     
-    await manager.connect("user1", ws)
+    await manager.connect(ws, "user1")
     await manager.send_personal_message("Hello User1", "user1")
     
     assert "Hello User1" in ws.messages
@@ -62,8 +66,8 @@ async def test_connection_manager_broadcast():
     ws1 = MockWebSocket()
     ws2 = MockWebSocket()
     
-    await manager.connect("user1", ws1)
-    await manager.connect("user2", ws2)
+    await manager.connect(ws1, "user1")
+    await manager.connect(ws2, "user2")
     
     await manager.broadcast("Broadcast Message")
     
@@ -77,8 +81,8 @@ async def test_connection_manager_broadcast_json():
     ws1 = MockWebSocket()
     ws2 = MockWebSocket()
     
-    await manager.connect("user1", ws1)
-    await manager.connect("user2", ws2)
+    await manager.connect(ws1, "user1")
+    await manager.connect(ws2, "user2")
     
     data = {"type": "notification", "message": "Hello"}
     await manager.broadcast_json(data)
@@ -144,7 +148,7 @@ async def test_connection_manager_get_connection():
     manager = ConnectionManager()
     ws = MockWebSocket()
     
-    await manager.connect("user1", ws)
+    await manager.connect(ws, "user1")
     
     retrieved = manager.get_connection("user1")
     assert retrieved == ws
@@ -157,9 +161,9 @@ async def test_connection_manager_multiple_connections():
     ws2 = MockWebSocket()
     ws3 = MockWebSocket()
     
-    await manager.connect("user1", ws1)
-    await manager.connect("user2", ws2)
-    await manager.connect("user3", ws3)
+    await manager.connect(ws1, "user1")
+    await manager.connect(ws2, "user2")
+    await manager.connect(ws3, "user3")
     
     assert len(manager.get_active_connections()) == 3
 

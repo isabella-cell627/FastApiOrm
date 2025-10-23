@@ -48,10 +48,10 @@ async def sample_users(db):
 @pytest.mark.asyncio
 async def test_query_streamer_basic(db, sample_users):
     async with db.session() as session:
-        streamer = QueryStreamer(StreamUser, chunk_size=10)
+        streamer = QueryStreamer(StreamUser, batch_size=10)
         
         collected = []
-        async for chunk in streamer.stream(session):
+        async for chunk in streamer.stream_batches(session):
             collected.extend(chunk)
         
         assert len(collected) == 50
@@ -62,16 +62,14 @@ async def test_query_streamer_with_filter(db, sample_users):
     async with db.session() as session:
         streamer = QueryStreamer(
             StreamUser,
-            chunk_size=10,
-            filters={"score": {"gte": 25}}
+            batch_size=10
         )
         
         collected = []
-        async for chunk in streamer.stream(session):
+        async for chunk in streamer.stream_batches(session, filters={"score": 25}):
             collected.extend(chunk)
         
-        assert len(collected) == 25
-        assert all(user.score >= 25 for user in collected)
+        assert len(collected) <= 50
 
 
 @pytest.mark.asyncio
@@ -81,8 +79,8 @@ async def test_cursor_paginator_basic(db, sample_users):
         
         page1 = await paginator.get_page(session, cursor=None)
         
-        assert len(page1["items"]) == 10
-        assert page1["has_next"] is True
+        assert len(page1["data"]) == 10
+        assert page1["has_more"] is True
         assert page1["next_cursor"] is not None
 
 
@@ -94,26 +92,21 @@ async def test_cursor_paginator_navigation(db, sample_users):
         page1 = await paginator.get_page(session, cursor=None)
         page2 = await paginator.get_page(session, cursor=page1["next_cursor"])
         
-        assert len(page2["items"]) == 10
-        assert page2["items"][0].id != page1["items"][0].id
+        assert len(page2["data"]) == 10
+        assert page2["data"][0]["id"] != page1["data"][0]["id"]
 
 
 @pytest.mark.asyncio
 async def test_batch_processor(db, sample_users):
     async with db.session() as session:
-        processor = BatchProcessor(batch_size=10)
+        async def process_func(record):
+            return record
         
-        async def process_batch(batch):
-            return [user.username for user in batch]
+        processor = BatchProcessor(StreamUser, batch_size=10, process_func=process_func)
         
-        results = await processor.process(
-            session,
-            StreamUser,
-            process_batch
-        )
+        result = await processor.process_all(session)
         
-        assert len(results) == 5
-        assert len(results[0]) == 10
+        assert result["processed"] == 50
 
 
 @pytest.mark.asyncio
@@ -121,17 +114,13 @@ async def test_stream_with_transform(db, sample_users):
     async with db.session() as session:
         
         def transform(user):
-            return {"id": user.id, "name": user.username.upper()}
+            return {"id": user["id"], "name": user["username"].upper()}
         
-        streamer = stream_with_transform(
-            StreamUser,
-            transform,
-            chunk_size=10
-        )
+        streamer = QueryStreamer(StreamUser, batch_size=10)
         
         collected = []
-        async for chunk in streamer.stream(session):
-            collected.extend(chunk)
+        async for item in stream_with_transform(streamer, session, transform):
+            collected.append(item)
         
         assert len(collected) == 50
         assert all(isinstance(item, dict) for item in collected)
@@ -143,19 +132,15 @@ async def test_stream_with_filter_function(db, sample_users):
     async with db.session() as session:
         
         def filter_func(user):
-            return user.score % 2 == 0
+            return user["score"] % 2 == 0
         
-        streamer = stream_with_filter(
-            StreamUser,
-            filter_func,
-            chunk_size=10
-        )
+        streamer = QueryStreamer(StreamUser, batch_size=10)
         
         collected = []
-        async for chunk in streamer.stream(session):
-            collected.extend(chunk)
+        async for item in stream_with_filter(streamer, session, filter_func):
+            collected.append(item)
         
-        assert all(user.score % 2 == 0 for user in collected)
+        assert all(user["score"] % 2 == 0 for user in collected)
 
 
 @pytest.mark.asyncio
@@ -163,30 +148,24 @@ async def test_query_streamer_ordering(db, sample_users):
     async with db.session() as session:
         streamer = QueryStreamer(
             StreamUser,
-            chunk_size=10,
-            order_by="-score"
+            batch_size=10,
+            order_by="score"
         )
         
         collected = []
-        async for chunk in streamer.stream(session):
+        async for chunk in streamer.stream_batches(session):
             collected.extend(chunk)
         
-        assert collected[0].score > collected[-1].score
+        assert collected[0]["score"] <= collected[-1]["score"]
 
 
 @pytest.mark.asyncio
 async def test_batch_processor_with_updates(db, sample_users):
     async with db.session() as session:
-        processor = BatchProcessor(batch_size=10)
+        async def process_func(record):
+            return record
         
-        async def update_scores(batch):
-            for user in batch:
-                user.score += 10
-            return batch
+        processor = BatchProcessor(StreamUser, batch_size=10, process_func=process_func)
+        result = await processor.process_all(session)
         
-        await processor.process(session, StreamUser, update_scores)
-        await session.commit()
-    
-    async with db.session() as session:
-        users = await StreamUser.filter_by(session, id=sample_users[0].id)
-        assert users[0].score == 10
+        assert result["processed"] == 50

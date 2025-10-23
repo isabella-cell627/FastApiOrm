@@ -121,7 +121,7 @@ async def test_seeder_factory(db):
         "age": 25 + i
     })
     
-    users = await seeder.use_factory("user", 3)
+    users = await seeder.use_factory("user", SeedUser, 3)
     
     assert len(users) == 3
     assert users[0].username == "factory_user0"
@@ -146,7 +146,7 @@ async def test_seeder_seed_batch(db):
     """Test batch seeding performance"""
     seeder = Seeder(db)
     
-    users = await seeder.seed_batch(SeedUser, 100, {
+    users = await seeder.seed(SeedUser, 100, {
         "username": lambda i: f"user{i}",
         "email": lambda i: f"user{i}@test.com",
         "age": lambda i: 18 + (i % 50)
@@ -167,7 +167,7 @@ async def test_seeder_clear(db):
         "email": lambda i: f"user{i}@test.com"
     })
     
-    await seeder.clear(SeedUser)
+    await seeder.truncate(SeedUser)
     
     async with db.session() as session:
         count = await SeedUser.count(session)
