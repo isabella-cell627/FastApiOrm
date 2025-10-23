@@ -323,12 +323,12 @@ class RateLimiter:
     def _create_limiter(self):
         """Create appropriate limiter based on strategy"""
         if self.config.strategy == "sliding":
-            return SlidingWindowCounter(self.config.requests, self.config.window)
+            return SlidingWindowCounter(self.config.max_requests, self.config.window_size)
         elif self.config.strategy == "fixed":
-            return FixedWindowCounter(self.config.requests, self.config.window)
+            return FixedWindowCounter(self.config.max_requests, self.config.window_size)
         elif self.config.strategy == "token_bucket":
-            refill_rate = self.config.requests / self.config.window
-            return TokenBucket(self.config.requests, refill_rate)
+            refill_rate = self.config.max_requests / self.config.window_size
+            return TokenBucket(self.config.max_requests, refill_rate)
         else:
             raise ValueError(f"Unknown strategy: {self.config.strategy}")
     

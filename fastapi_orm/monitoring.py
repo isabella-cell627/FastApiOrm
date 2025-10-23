@@ -164,6 +164,10 @@ class QueryMonitor:
     def clear(self) -> None:
         """Clear all tracked queries"""
         self._queries.clear()
+    
+    def reset(self) -> None:
+        """Reset/clear all tracked queries (alias for clear())"""
+        self.clear()
 
 
 # Global monitor instance

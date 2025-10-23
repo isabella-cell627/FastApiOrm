@@ -59,22 +59,29 @@ class ConnectionManager:
             heartbeat_interval: Heartbeat interval in seconds
         """
         self.active_connections: Dict[str, Set[WebSocket]] = defaultdict(set)
+        self._user_connections: Dict[str, Set[WebSocket]] = defaultdict(set)
         self._logger = logging.getLogger("fastapi_orm.websocket")
         self.enable_heartbeat = enable_heartbeat
         self.heartbeat_interval = heartbeat_interval
         self._heartbeat_task: Optional[asyncio.Task] = None
         self._registered_models: Set[str] = set()
     
-    async def connect(self, websocket: WebSocket, channel: str = "default") -> None:
+    async def connect(self, websocket: WebSocket, channel: str = "default", user_id: Optional[str] = None) -> None:
         """
         Accept and register a new WebSocket connection.
         
         Args:
             websocket: FastAPI WebSocket instance
             channel: Channel name for this connection
+            user_id: Optional user identifier for user-based lookups
         """
         await websocket.accept()
+        
         self.active_connections[channel].add(websocket)
+        if user_id:
+            if user_id not in self._user_connections:
+                self._user_connections[user_id] = set()
+            self._user_connections[user_id].add(websocket)
         self._logger.info(f"Client connected to channel '{channel}'. Total: {len(self.active_connections[channel])}")
         
         await self.send_personal({
@@ -87,20 +94,58 @@ class ConnectionManager:
         if self.enable_heartbeat and self._heartbeat_task is None:
             self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
     
-    def disconnect(self, websocket: WebSocket, channel: str = "default") -> None:
+    def disconnect(self, websocket_or_user_id: Any, channel: Optional[str] = None) -> None:
         """
         Remove WebSocket connection.
         
+        Supports two signatures:
+        1. disconnect(websocket) or disconnect(websocket, channel) - remove from all or specific channel
+        2. disconnect(user_id) - disconnect all connections for user
+        
         Args:
-            websocket: FastAPI WebSocket instance
-            channel: Channel name
+            websocket_or_user_id: WebSocket instance or user ID string
+            channel: Optional channel name (if None, searches all channels for the websocket)
         """
-        if websocket in self.active_connections[channel]:
-            self.active_connections[channel].remove(websocket)
-            self._logger.info(f"Client disconnected from channel '{channel}'. Remaining: {len(self.active_connections[channel])}")
+        if isinstance(websocket_or_user_id, str):
+            # Disconnect by user_id - remove all websockets for this user
+            user_id = websocket_or_user_id
+            websockets = self._user_connections.get(user_id, set()).copy()
+            for websocket in websockets:
+                # Find and remove from all channels
+                for ch, conns in list(self.active_connections.items()):
+                    if websocket in conns:
+                        conns.remove(websocket)
+                        self._logger.info(f"Client {user_id} disconnected from channel '{ch}'. Remaining: {len(conns)}")
+                        if not conns:
+                            del self.active_connections[ch]
+            if user_id in self._user_connections:
+                del self._user_connections[user_id]
+        else:
+            # Disconnect by websocket
+            websocket = websocket_or_user_id
             
-            if not self.active_connections[channel]:
-                del self.active_connections[channel]
+            # If no channel specified, search all channels
+            if channel is None:
+                channels_to_check = list(self.active_connections.keys())
+            else:
+                channels_to_check = [channel]
+            
+            # Remove websocket from all matching channels
+            for ch in channels_to_check:
+                if websocket in self.active_connections[ch]:
+                    self.active_connections[ch].remove(websocket)
+                    self._logger.info(f"Client disconnected from channel '{ch}'. Remaining: {len(self.active_connections[ch])}")
+                    
+                    if not self.active_connections[ch]:
+                        del self.active_connections[ch]
+            
+            # Also remove from user connections if exists
+            for user_id, websockets in list(self._user_connections.items()):
+                if websocket in websockets:
+                    websockets.discard(websocket)
+                    if not websockets:
+                        del self._user_connections[user_id]
+                    break
     
     async def send_personal(self, message: Any, websocket: WebSocket) -> None:
         """
@@ -183,6 +228,70 @@ class ConnectionManager:
     def get_channels(self) -> List[str]:
         """Get list of active channels"""
         return list(self.active_connections.keys())
+    
+    def get_active_connections(self, channel: Optional[str] = None) -> List[WebSocket]:
+        """
+        Get list of active WebSocket connections.
+        
+        Args:
+            channel: Specific channel (None = all channels)
+        
+        Returns:
+            List of WebSocket connections
+        """
+        if channel:
+            return list(self.active_connections.get(channel, set()))
+        all_connections = []
+        for conns in self.active_connections.values():
+            all_connections.extend(conns)
+        return all_connections
+    
+    def get_connection(self, user_id: str) -> Optional[WebSocket]:
+        """
+        Get first WebSocket connection for a specific user.
+        
+        Args:
+            user_id: User identifier
+        
+        Returns:
+            WebSocket connection or None if not found
+        """
+        websockets = self._user_connections.get(user_id)
+        if websockets:
+            return next(iter(websockets), None)
+        return None
+    
+    async def send_personal_message(self, message: Any, user_id: str) -> None:
+        """
+        Send message to a specific user by user_id.
+        
+        Args:
+            message: Message to send
+            user_id: User identifier
+        """
+        websocket = self.get_connection(user_id)
+        if websocket:
+            await self.send_personal(message, websocket)
+    
+    async def broadcast_json(self, data: Dict[str, Any], channel: Optional[str] = None) -> None:
+        """
+        Broadcast JSON data to all connections.
+        
+        Args:
+            data: JSON data to broadcast
+            channel: Optional channel to broadcast to
+        """
+        await self.broadcast(data, channel)
+    
+    async def broadcast_to_channel(self, channel: str, message: Any) -> None:
+        """
+        Broadcast message to a specific channel.
+        
+        Args:
+            channel: Channel name
+            message: Message to broadcast
+        """
+        await self.broadcast(message, channel)
     
     async def _heartbeat_loop(self) -> None:
         """Send periodic heartbeat/ping messages to keep connections alive"""
@@ -334,6 +443,19 @@ class WebSocketEventFilter:
             return self.condition(event_data)
         except Exception:
             return True
+    
+    @staticmethod
+    def create_filter(condition: Callable[[Dict[str, Any]], bool]) -> 'WebSocketEventFilter':
+        """
+        Create a new event filter.
+        
+        Args:
+            condition: Function that returns True if event should be sent
+        
+        Returns:
+            WebSocketEventFilter instance
+        """
+        return WebSocketEventFilter(condition)
 
 
 class WebSocketSubscriptionManager(ConnectionManager):
@@ -357,21 +479,47 @@ class WebSocketSubscriptionManager(ConnectionManager):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._subscriptions: Dict[WebSocket, Dict[str, Any]] = {}
+        self._user_subscriptions: Dict[str, Dict[str, Any]] = {}
     
     async def subscribe(
         self,
-        websocket: WebSocket,
-        channel: str,
-        filters: Dict[str, Any]
+        user_id_or_ws: Any,
+        websocket_or_channel: Any = None,
+        channel_or_filters: Any = None,
+        filters: Dict[str, Any] = None
     ) -> None:
         """
         Subscribe client to filtered events.
         
+        Supports two signatures:
+        1. subscribe(websocket, channel, filters) - original
+        2. subscribe(user_id, websocket, channel) - for tests
+        
         Args:
-            websocket: WebSocket connection
-            channel: Channel name
-            filters: Filter criteria (e.g., {"user_id": 123, "status": "active"})
+            user_id_or_ws: User ID or WebSocket connection
+            websocket_or_channel: WebSocket or channel name
+            channel_or_filters: Channel name or filters dict
+            filters: Filter criteria (optional)
         """
+        # Detect which signature is being used
+        if isinstance(user_id_or_ws, str):
+            # New signature: subscribe(user_id, websocket, channel)
+            user_id = user_id_or_ws
+            websocket = websocket_or_channel
+            channel = channel_or_filters
+            filters = filters or {}
+            
+            self._user_subscriptions[user_id] = {
+                "websocket": websocket,
+                "channel": channel,
+                "filters": filters
+            }
+        else:
+            # Original signature: subscribe(websocket, channel, filters)
+            websocket = user_id_or_ws
+            channel = websocket_or_channel
+            filters = channel_or_filters or {}
+        
         self._subscriptions[websocket] = {
             "channel": channel,
             "filters": filters
@@ -384,10 +532,62 @@ class WebSocketSubscriptionManager(ConnectionManager):
             "filters": filters
         }, websocket)
     
-    def unsubscribe(self, websocket: WebSocket) -> None:
-        """Remove subscription filters for a client"""
-        if websocket in self._subscriptions:
-            del self._subscriptions[websocket]
+    def unsubscribe(self, user_id_or_ws: Any, channel: Optional[str] = None) -> None:
+        """
+        Remove subscription filters for a client.
+        
+        Supports two signatures:
+        1. unsubscribe(websocket) - original
+        2. unsubscribe(user_id, channel) - for tests
+        
+        Args:
+            user_id_or_ws: User ID or WebSocket connection
+            channel: Channel name (when using user_id)
+        """
+        if isinstance(user_id_or_ws, str):
+            # New signature: unsubscribe(user_id, channel)
+            user_id = user_id_or_ws
+            if user_id in self._user_subscriptions:
+                websocket = self._user_subscriptions[user_id].get("websocket")
+                if websocket and websocket in self._subscriptions:
+                    del self._subscriptions[websocket]
+                del self._user_subscriptions[user_id]
+        else:
+            # Original signature: unsubscribe(websocket)
+            websocket = user_id_or_ws
+            if websocket in self._subscriptions:
+                del self._subscriptions[websocket]
+    
+    def is_subscribed(self, user_id: str, channel: str) -> bool:
+        """
+        Check if a user is subscribed to a channel.
+        
+        Args:
+            user_id: User identifier
+            channel: Channel name
+        
+        Returns:
+            True if subscribed, False otherwise
+        """
+        if user_id in self._user_subscriptions:
+            subscription = self._user_subscriptions[user_id]
+            return subscription.get("channel") == channel
+        
+        websocket = self.get_connection(user_id)
+        if not websocket or websocket not in self._subscriptions:
+            return False
+        subscription = self._subscriptions[websocket]
+        return subscription.get("channel") == channel
+    
+    async def broadcast_to_channel(self, channel: str, message: Any) -> None:
+        """
+        Broadcast message to a specific channel.
+        
+        Args:
+            channel: Channel name
+            message: Message to broadcast
+        """
+        await self.broadcast(message, channel)
     
     async def broadcast(
         self,
