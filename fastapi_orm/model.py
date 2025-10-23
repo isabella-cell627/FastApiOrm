@@ -90,9 +90,18 @@ class Model(Base, metaclass=ModelMeta):
             set_audit_user(audit_user_id)
         
         instance = cls(**kwargs)
+        
+        # Trigger pre_save hook
+        from fastapi_orm.hooks import trigger_pre_save, trigger_post_save
+        await trigger_pre_save(cls, instance, created=True)
+        
         session.add(instance)
         await session.flush()
         await session.refresh(instance)
+        
+        # Trigger post_save hook
+        await trigger_post_save(cls, instance, created=True)
+        
         return instance
     
     @classmethod
@@ -378,10 +387,19 @@ class Model(Base, metaclass=ModelMeta):
             from fastapi_orm.audit import set_audit_user
             set_audit_user(audit_user_id)
         
+        # Trigger pre_update and pre_save hooks
+        from fastapi_orm.hooks import trigger_pre_update, trigger_pre_save, trigger_post_update, trigger_post_save
+        await trigger_pre_update(self.__class__, self)
+        await trigger_pre_save(self.__class__, self, created=False)
+        
         for key, value in kwargs.items():
             setattr(self, key, value)
         await session.flush()
         await session.refresh(self)
+        
+        # Trigger post_update and post_save hooks
+        await trigger_post_update(self.__class__, self)
+        await trigger_post_save(self.__class__, self, created=False)
     
     async def update_fields(self, session: AsyncSession, **kwargs) -> None:
         """Alias for update()"""
@@ -419,8 +437,15 @@ class Model(Base, metaclass=ModelMeta):
             from fastapi_orm.audit import set_audit_user
             set_audit_user(audit_user_id)
         
+        # Trigger pre_delete hook
+        from fastapi_orm.hooks import trigger_pre_delete, trigger_post_delete
+        await trigger_pre_delete(self.__class__, self)
+        
         await session.delete(self)
         await session.flush()
+        
+        # Trigger post_delete hook
+        await trigger_post_delete(self.__class__, self)
     
     @classmethod
     async def delete_by_id(cls, session: AsyncSession, id: Any) -> bool:

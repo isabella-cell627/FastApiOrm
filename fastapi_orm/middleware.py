@@ -255,7 +255,7 @@ class PerformanceMiddleware(BaseHTTPMiddleware):
         
         # Add performance headers if enabled
         if self.add_headers:
-            response.headers["X-Process-Time-MS"] = str(round(duration_ms, 2))
+            response.headers["X-Process-Time"] = str(round(duration_ms, 2))
         
         # Log slow requests
         if duration > self.slow_request_threshold:

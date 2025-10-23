@@ -89,16 +89,28 @@ class Field:
         - UUID -> String(36) (stores UUID as string)
         """
         from sqlalchemy.dialects.postgresql import ARRAY as PG_ARRAY, UUID as PG_UUID
+        from sqlalchemy.types import TypeDecorator
+        
+        # Get the actual type (handle TypeDecorator wrapping)
+        field_type = self.field_type
+        if isinstance(field_type, TypeDecorator):
+            field_type = field_type.impl
         
         # Check if this is a PostgreSQL ARRAY type instance
-        if isinstance(self.field_type, PG_ARRAY):
+        if isinstance(field_type, PG_ARRAY):
             # Fallback to JSON for SQLite
             return JSON
         
-        # Check if this is a PostgreSQL UUID type instance
-        if isinstance(self.field_type, PG_UUID):
-            # Fallback to String(36) for SQLite  
-            return String(36)
+        # Check if this is a PostgreSQL UUID type (class or instance)
+        if isinstance(field_type, (PG_UUID, type)) and (field_type is PG_UUID or isinstance(field_type, PG_UUID)):
+            # Return UUID type that's compatible with both PostgreSQL and SQLite
+            # SQLAlchemy will automatically use String(36) for SQLite
+            return self.field_type
+        
+        # Check the type name for UUID (handles PGUUID instances)
+        type_name = str(type(self.field_type).__name__)
+        if 'UUID' in type_name or (hasattr(self.field_type, '__visit_name__') and 'UUID' in str(self.field_type.__visit_name__).upper()):
+            return self.field_type
         
         # Return original type for all other cases
         return self.field_type

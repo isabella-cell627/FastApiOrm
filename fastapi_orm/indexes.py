@@ -44,40 +44,55 @@ class Index:
     Fluent interface for creating database indexes.
     
     Example:
+        # Create a simple index
+        idx = Index("email")
+        
         # Create a composite index
-        idx = Index("idx_name", User.field1, User.field2)
+        idx = Index("field1", "field2")
+        
+        # Create a named index
+        idx = Index("email", name="idx_user_email")
+        
+        # Create a unique index
+        idx = Index("email", unique=True)
         
         # Create a partial index
-        idx = Index("idx_name", User.field1).where(User.is_active == True)
-        
-        # Create a unique index with ordering
-        idx = Index("idx_name", User.field1.desc(), User.field2.asc()).unique()
+        idx = Index("field1", name="idx_name").where(condition)
     """
     
-    def __init__(self, name: str, *columns):
+    def __init__(self, *columns, name: Optional[str] = None, unique: bool = False):
         """
         Initialize an index.
         
         Args:
-            name: Name of the index
-            *columns: Column expressions to index
+            *columns: Column names or expressions to index
+            name: Optional name for the index (auto-generated if not provided)
+            unique: Whether the index should be unique
         """
-        self._name = name
-        self._columns = list(columns)
-        self._unique = False
+        self.columns = list(columns)
+        self.name = name or f"idx_{'_'.join(str(c) for c in columns)}"
+        self._unique = unique
         self._where_clause = None
         self._postgresql_using = None
         self._postgresql_with = None
     
-    def unique(self, is_unique: bool = True) -> "Index":
+    @property
+    def unique(self) -> bool:
+        """Get whether this index is unique."""
+        return self._unique
+    
+    def set_unique(self, is_unique: bool = True) -> "Index":
         """
-        Make this index unique.
+        Make this index unique (chainable method).
         
         Args:
             is_unique: Whether the index should be unique
         
         Returns:
             Self for method chaining
+        
+        Example:
+            Index("email").set_unique()
         """
         self._unique = is_unique
         return self
@@ -151,7 +166,7 @@ class Index:
         if self._postgresql_with:
             kwargs['postgresql_with'] = self._postgresql_with
         
-        return SQLAIndex(self._name, *self._columns, **kwargs)
+        return SQLAIndex(self.name, *self.columns, **kwargs)
 
 
 def create_index(
@@ -167,7 +182,7 @@ def create_index(
     
     Args:
         name: Index name
-        *columns: Columns to include in the index
+        *columns: Columns to include in the index (can be a single list or multiple args)
         unique: Whether the index should be unique
         where: Optional WHERE clause for partial index
         using: PostgreSQL index method (btree, hash, gist, gin, etc.)
@@ -179,9 +194,11 @@ def create_index(
     Examples:
         # Simple index
         create_index("idx_email", User.email)
+        create_index("idx_email", ["email"])
         
         # Composite index
         create_index("idx_name_email", User.name, User.email)
+        create_index("idx_name_email", ["name", "email"])
         
         # Unique index
         create_index("idx_unique_username", User.username, unique=True)
@@ -207,6 +224,10 @@ def create_index(
             fillfactor=70
         )
     """
+    # Handle case where columns might be passed as a list
+    if len(columns) == 1 and isinstance(columns[0], (list, tuple)):
+        columns = columns[0]
+    
     kwargs = {}
     
     if unique:
@@ -238,7 +259,7 @@ def create_partial_index(
     
     Args:
         name: Index name
-        *columns: Columns to include in the index
+        *columns: Columns to include in the index (can be a single list or multiple args)
         condition: WHERE condition for filtering rows
         unique: Whether the index should be unique
     
@@ -251,6 +272,11 @@ def create_partial_index(
             "idx_active_users_email",
             User.email,
             condition=User.is_active == True
+        )
+        create_partial_index(
+            "idx_active_users_email",
+            ["email"],
+            condition="is_active = 1"
         )
         
         # Index only published posts
@@ -268,6 +294,10 @@ def create_partial_index(
             unique=True
         )
     """
+    # Handle case where columns might be passed as a list
+    if len(columns) == 1 and isinstance(columns[0], (list, tuple)):
+        columns = columns[0]
+    
     return create_index(
         name,
         *columns,
@@ -288,7 +318,7 @@ def create_gin_index(name: str, *columns, **options) -> SQLAIndex:
     
     Args:
         name: Index name
-        *columns: Columns to index (typically array or JSONB)
+        *columns: Columns to index (typically array or JSONB, can be a list)
         **options: Additional index options
     
     Returns:
@@ -297,6 +327,7 @@ def create_gin_index(name: str, *columns, **options) -> SQLAIndex:
     Examples:
         # Index for array column
         create_gin_index("idx_post_tags", Post.tags)
+        create_gin_index("idx_post_tags", ["tags"])
         
         # Index for JSONB column
         create_gin_index("idx_metadata", User.metadata)
@@ -304,6 +335,10 @@ def create_gin_index(name: str, *columns, **options) -> SQLAIndex:
         # Index for full-text search
         create_gin_index("idx_search", Article.search_vector)
     """
+    # Handle case where columns might be passed as a list
+    if len(columns) == 1 and isinstance(columns[0], (list, tuple)):
+        columns = columns[0]
+    
     return create_index(name, *columns, using="gin", **options)
 
 
@@ -318,7 +353,7 @@ def create_btree_index(name: str, *columns, **options) -> SQLAIndex:
     
     Args:
         name: Index name
-        *columns: Columns to index
+        *columns: Columns to index (can be a list or multiple args)
         **options: Additional index options
     
     Returns:

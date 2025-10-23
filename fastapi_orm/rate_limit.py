@@ -16,17 +16,24 @@ class RateLimitConfig:
     Configuration for rate limiting.
     
     Attributes:
-        requests: Maximum number of requests allowed
-        window: Time window in seconds
+        max_requests: Maximum number of requests allowed (alias: requests)
+        window_size: Time window in seconds (alias: window)
         strategy: Rate limiting strategy ("fixed" or "sliding")
         identifier: Function to identify the client (default: IP address)
     """
-    requests: int
-    window: int
+    max_requests: Optional[int] = None
+    window_size: Optional[int] = None
+    requests: Optional[int] = None  # Backward compatibility
+    window: Optional[int] = None  # Backward compatibility
     strategy: str = "sliding"
     identifier: Optional[Callable[[Request], str]] = None
     
     def __post_init__(self):
+        # Handle both old and new parameter names
+        if self.max_requests is None:
+            self.max_requests = self.requests or 100
+        if self.window_size is None:
+            self.window_size = self.window or 60
         if self.identifier is None:
             self.identifier = lambda request: request.client.host if request.client else "unknown"
 
@@ -52,6 +59,7 @@ class TokenBucket:
         self.tokens = capacity
         self.last_refill = time.time()
         self._lock = asyncio.Lock()
+        self._client_tokens: Dict[str, Dict[str, Any]] = {}
     
     async def consume(self, tokens: int = 1) -> bool:
         """
@@ -79,6 +87,40 @@ class TokenBucket:
             
             return False
     
+    async def acquire(self, client_id: str) -> bool:
+        """
+        Try to acquire a token for a client (alias for consume).
+        
+        Args:
+            client_id: Client identifier
+        
+        Returns:
+            True if token was acquired, False otherwise
+        """
+        # Per-client token bucket
+        async with self._lock:
+            if client_id not in self._client_tokens:
+                self._client_tokens[client_id] = {
+                    'tokens': self.capacity,
+                    'last_refill': time.time()
+                }
+            
+            now = time.time()
+            client_data = self._client_tokens[client_id]
+            elapsed = now - client_data['last_refill']
+            
+            client_data['tokens'] = min(
+                self.capacity,
+                client_data['tokens'] + (elapsed * self.refill_rate)
+            )
+            client_data['last_refill'] = now
+            
+            if client_data['tokens'] >= 1:
+                client_data['tokens'] -= 1
+                return True
+            
+            return False
+    
     def get_tokens(self) -> float:
         """Get current number of available tokens"""
         return self.tokens
@@ -92,17 +134,19 @@ class SlidingWindowCounter:
     within a moving time window.
     """
     
-    def __init__(self, max_requests: int, window_seconds: int):
+    def __init__(self, max_requests: int, window_seconds: Optional[int] = None, window_size: Optional[int] = None):
         """
         Initialize sliding window counter.
         
         Args:
             max_requests: Maximum requests allowed in window
-            window_seconds: Time window in seconds
+            window_seconds: Time window in seconds (deprecated, use window_size)
+            window_size: Time window in seconds
         """
         self.max_requests = max_requests
-        self.window_seconds = window_seconds
-        self.requests: deque = deque()
+        self.window_seconds = window_size or window_seconds or 60
+        self.window_size = self.window_seconds  # Alias
+        self.requests: Dict[str, deque] = defaultdict(deque)
         self._lock = asyncio.Lock()
     
     async def is_allowed(self) -> bool:
@@ -112,28 +156,42 @@ class SlidingWindowCounter:
         Returns:
             True if request is allowed, False otherwise
         """
+        return await self.acquire("default")
+    
+    async def acquire(self, client_id: str) -> bool:
+        """
+        Check if request is allowed for a specific client.
+        
+        Args:
+            client_id: Client identifier
+        
+        Returns:
+            True if request is allowed, False otherwise
+        """
         async with self._lock:
             now = time.time()
             cutoff = now - self.window_seconds
+            client_requests = self.requests[client_id]
             
-            while self.requests and self.requests[0] < cutoff:
-                self.requests.popleft()
+            while client_requests and client_requests[0] < cutoff:
+                client_requests.popleft()
             
-            if len(self.requests) < self.max_requests:
-                self.requests.append(now)
+            if len(client_requests) < self.max_requests:
+                client_requests.append(now)
                 return True
             
             return False
     
-    def get_count(self) -> int:
-        """Get current request count in window"""
-        return len(self.requests)
+    def get_count(self, client_id: str = "default") -> int:
+        """Get current request count in window for a client"""
+        return len(self.requests.get(client_id, []))
     
-    def get_reset_time(self) -> float:
-        """Get time until oldest request expires"""
-        if not self.requests:
+    def get_reset_time(self, client_id: str = "default") -> float:
+        """Get time until oldest request expires for a client"""
+        client_requests = self.requests.get(client_id)
+        if not client_requests:
             return 0
-        return self.requests[0] + self.window_seconds - time.time()
+        return client_requests[0] + self.window_seconds - time.time()
 
 
 class FixedWindowCounter:
@@ -144,18 +202,19 @@ class FixedWindowCounter:
     Can allow up to 2x the limit at window boundaries.
     """
     
-    def __init__(self, max_requests: int, window_seconds: int):
+    def __init__(self, max_requests: int, window_seconds: Optional[int] = None, window_size: Optional[int] = None):
         """
         Initialize fixed window counter.
         
         Args:
             max_requests: Maximum requests allowed per window
-            window_seconds: Time window in seconds
+            window_seconds: Time window in seconds (deprecated, use window_size)
+            window_size: Time window in seconds
         """
         self.max_requests = max_requests
-        self.window_seconds = window_seconds
-        self.count = 0
-        self.window_start = time.time()
+        self.window_seconds = window_size or window_seconds or 60
+        self.window_size = self.window_seconds  # Alias
+        self.clients: Dict[str, Dict[str, Any]] = {}
         self._lock = asyncio.Lock()
     
     async def is_allowed(self) -> bool:
@@ -165,26 +224,49 @@ class FixedWindowCounter:
         Returns:
             True if request is allowed, False otherwise
         """
+        return await self.acquire("default")
+    
+    async def acquire(self, client_id: str) -> bool:
+        """
+        Check if request is allowed for a specific client.
+        
+        Args:
+            client_id: Client identifier
+        
+        Returns:
+            True if request is allowed, False otherwise
+        """
         async with self._lock:
             now = time.time()
             
-            if now - self.window_start >= self.window_seconds:
-                self.count = 0
-                self.window_start = now
+            if client_id not in self.clients:
+                self.clients[client_id] = {
+                    'count': 0,
+                    'window_start': now
+                }
             
-            if self.count < self.max_requests:
-                self.count += 1
+            client_data = self.clients[client_id]
+            
+            if now - client_data['window_start'] >= self.window_seconds:
+                client_data['count'] = 0
+                client_data['window_start'] = now
+            
+            if client_data['count'] < self.max_requests:
+                client_data['count'] += 1
                 return True
             
             return False
     
-    def get_count(self) -> int:
-        """Get current request count"""
-        return self.count
+    def get_count(self, client_id: str = "default") -> int:
+        """Get current request count for a client"""
+        return self.clients.get(client_id, {}).get('count', 0)
     
-    def get_reset_time(self) -> float:
-        """Get time until window resets"""
-        return (self.window_start + self.window_seconds) - time.time()
+    def get_reset_time(self, client_id: str = "default") -> float:
+        """Get time until window resets for a client"""
+        client_data = self.clients.get(client_id)
+        if not client_data:
+            return 0
+        return (client_data['window_start'] + self.window_seconds) - time.time()
 
 
 class RateLimiter:

@@ -138,6 +138,48 @@ class QueryBuilder:
         self._query = self._query.offset(offset)
         return self
     
+    def group_by(self, *columns) -> 'QueryBuilder':
+        """
+        Add GROUP BY clause.
+        
+        Args:
+            *columns: Columns to group by
+        
+        Returns:
+            QueryBuilder instance for chaining
+        """
+        self._query = self._query.group_by(*columns)
+        return self
+    
+    def having(self, *conditions) -> 'QueryBuilder':
+        """
+        Add HAVING clause (must be used with group_by).
+        
+        Args:
+            *conditions: Filter conditions for grouped results
+        
+        Returns:
+            QueryBuilder instance for chaining
+        """
+        self._query = self._query.having(*conditions)
+        return self
+    
+    def distinct(self, *columns) -> 'QueryBuilder':
+        """
+        Add DISTINCT clause.
+        
+        Args:
+            *columns: Optional columns for DISTINCT ON (PostgreSQL)
+        
+        Returns:
+            QueryBuilder instance for chaining
+        """
+        if columns:
+            self._query = self._query.distinct(*columns)
+        else:
+            self._query = self._query.distinct()
+        return self
+    
     def cte(self, query: Select, name: str, recursive: bool = False) -> CTE:
         """
         Create a Common Table Expression (CTE).
@@ -292,6 +334,18 @@ class QueryBuilder:
         query = self.build()
         result = await session.execute(query)
         return result.scalar_one_or_none()
+    
+    async def all(self, session: AsyncSession) -> List[T]:
+        """
+        Execute the query and return all results (alias for execute).
+        
+        Args:
+            session: Database session
+        
+        Returns:
+            List of all results
+        """
+        return await self.execute(session)
     
     async def count(self, session: AsyncSession) -> int:
         """
