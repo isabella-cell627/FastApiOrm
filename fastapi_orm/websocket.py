@@ -72,10 +72,14 @@ class ConnectionManager:
         
         Args:
             websocket: FastAPI WebSocket instance
-            channel: Channel name for this connection
-            user_id: Optional user identifier for user-based lookups
+            channel: Channel name for this connection (also used as user_id if user_id not provided)
+            user_id: Optional user identifier for user-based lookups (defaults to channel)
         """
         await websocket.accept()
+        
+        # If user_id not provided, use channel as user_id for convenience
+        if user_id is None:
+            user_id = channel
         
         self.active_connections[channel].add(websocket)
         if user_id:
@@ -94,7 +98,7 @@ class ConnectionManager:
         if self.enable_heartbeat and self._heartbeat_task is None:
             self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
     
-    def disconnect(self, websocket_or_user_id: Any, channel: Optional[str] = None) -> None:
+    async def disconnect(self, websocket_or_user_id: Any, channel: Optional[str] = None) -> None:
         """
         Remove WebSocket connection.
         
@@ -445,17 +449,30 @@ class WebSocketEventFilter:
             return True
     
     @staticmethod
-    def create_filter(condition: Callable[[Dict[str, Any]], bool]) -> 'WebSocketEventFilter':
+    def create_filter(
+        condition: Optional[Callable[[Dict[str, Any]], bool]] = None,
+        event_types: Optional[List[str]] = None
+    ) -> 'WebSocketEventFilter':
         """
         Create a new event filter.
         
         Args:
             condition: Function that returns True if event should be sent
+            event_types: List of event types to filter (alternative to condition)
         
         Returns:
             WebSocketEventFilter instance
         """
-        return WebSocketEventFilter(condition)
+        if event_types is not None:
+            # Create condition from event_types
+            def type_condition(data: Dict[str, Any]) -> bool:
+                return data.get("type") in event_types
+            return WebSocketEventFilter(type_condition)
+        elif condition is not None:
+            return WebSocketEventFilter(condition)
+        else:
+            # Default: allow all events
+            return WebSocketEventFilter(lambda data: True)
 
 
 class WebSocketSubscriptionManager(ConnectionManager):
@@ -509,7 +526,10 @@ class WebSocketSubscriptionManager(ConnectionManager):
             channel = channel_or_filters
             filters = filters or {}
             
-            self._user_subscriptions[user_id] = {
+            # Store multiple subscriptions per user
+            if user_id not in self._user_subscriptions:
+                self._user_subscriptions[user_id] = {}
+            self._user_subscriptions[user_id][channel] = {
                 "websocket": websocket,
                 "channel": channel,
                 "filters": filters
@@ -519,6 +539,11 @@ class WebSocketSubscriptionManager(ConnectionManager):
             websocket = user_id_or_ws
             channel = websocket_or_channel
             filters = channel_or_filters or {}
+        
+        # Ensure websocket is added to active_connections for this channel
+        if channel not in self.active_connections:
+            self.active_connections[channel] = set()
+        self.active_connections[channel].add(websocket)
         
         self._subscriptions[websocket] = {
             "channel": channel,
@@ -532,7 +557,7 @@ class WebSocketSubscriptionManager(ConnectionManager):
             "filters": filters
         }, websocket)
     
-    def unsubscribe(self, user_id_or_ws: Any, channel: Optional[str] = None) -> None:
+    async def unsubscribe(self, user_id_or_ws: Any, channel: Optional[str] = None) -> None:
         """
         Remove subscription filters for a client.
         
@@ -570,8 +595,13 @@ class WebSocketSubscriptionManager(ConnectionManager):
             True if subscribed, False otherwise
         """
         if user_id in self._user_subscriptions:
-            subscription = self._user_subscriptions[user_id]
-            return subscription.get("channel") == channel
+            subscriptions = self._user_subscriptions[user_id]
+            # Check if channel exists in user's subscriptions
+            if isinstance(subscriptions, dict) and channel in subscriptions:
+                return True
+            # Old format compatibility
+            if not isinstance(subscriptions, dict):
+                return subscriptions.get("channel") == channel
         
         websocket = self.get_connection(user_id)
         if not websocket or websocket not in self._subscriptions:
@@ -587,7 +617,17 @@ class WebSocketSubscriptionManager(ConnectionManager):
             channel: Channel name
             message: Message to broadcast
         """
-        await self.broadcast(message, channel)
+        # For subscription manager, send to all subscribed websockets in the channel
+        # Not filtered by subscription criteria for this direct channel broadcast
+        if channel in self.active_connections:
+            for websocket in self.active_connections[channel]:
+                try:
+                    if isinstance(message, (dict, list)):
+                        await websocket.send_json(message)
+                    else:
+                        await websocket.send_text(str(message))
+                except Exception as e:
+                    self._logger.error(f"Error broadcasting to channel {channel}: {e}")
     
     async def broadcast(
         self,

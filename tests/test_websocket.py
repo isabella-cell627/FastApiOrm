@@ -100,8 +100,8 @@ async def test_websocket_event_filter():
     event1 = {"type": "user_update", "data": "test"}
     event2 = {"type": "message", "data": "test"}
     
-    assert filter_func(event1) is True
-    assert filter_func(event2) is False
+    assert filter_func.should_send(event1) is True
+    assert filter_func.should_send(event2) is False
 
 
 @pytest.mark.asyncio

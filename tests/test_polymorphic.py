@@ -187,7 +187,7 @@ async def test_polymorphic_mixin(db):
         
         comment = Comment()
         comment.text = "Test comment"
-        comment.set_content_object(post)
+        await comment.set_content_object(post)
         
         assert comment.content_type == "poly_posts"
         assert comment.content_id == post.id

@@ -421,17 +421,18 @@ def create_covering_index(
 
 
 # Convenience function for table __table_args__
-def indexes(*index_objects) -> tuple:
+def indexes(*index_objects):
     """
     Helper to include multiple indexes in a model's __table_args__.
+    Can also be used as a class decorator.
     
     Args:
         *index_objects: Index instances to include
     
     Returns:
-        Tuple of indexes suitable for __table_args__
+        Tuple of indexes suitable for __table_args__ or decorator function
     
-    Example:
+    Example as __table_args__:
         class User(Model):
             __tablename__ = "users"
             
@@ -447,5 +448,48 @@ def indexes(*index_objects) -> tuple:
                     condition=is_active == True
                 )
             )
+    
+    Example as decorator:
+        @indexes(
+            Index("name"),
+            Index("category", "price")
+        )
+        class Product(Model):
+            ...
     """
+    # If used as a decorator (called with Index objects)
+    def decorator(cls):
+        # Build Index objects if needed
+        built_indexes = []
+        for idx in index_objects:
+            if isinstance(idx, Index):
+                built_indexes.append(idx.build())
+            else:
+                built_indexes.append(idx)
+        
+        # Set or append to __table_args__
+        if hasattr(cls, '__table_args__'):
+            existing = cls.__table_args__
+            if isinstance(existing, dict):
+                cls.__table_args__ = tuple(built_indexes) + (existing,)
+            elif isinstance(existing, tuple):
+                cls.__table_args__ = existing + tuple(built_indexes)
+            else:
+                cls.__table_args__ = tuple(built_indexes)
+        else:
+            cls.__table_args__ = tuple(built_indexes)
+        
+        return cls
+    
+    # If no arguments or used directly, return tuple
+    if len(index_objects) == 1 and isinstance(index_objects[0], type):
+        # Called as @indexes without arguments
+        return index_objects[0]
+    
+    # Check if being used as decorator (Index objects) or direct tuple
+    if index_objects and all(isinstance(idx, (Index, SQLAIndex)) for idx in index_objects):
+        # Return decorator function
+        return decorator
+    
+    # Return tuple for direct __table_args__ usage
     return tuple(index_objects)
